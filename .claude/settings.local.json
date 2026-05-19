@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dotnet new *)",
+      "Bash(dotnet add *)",
+      "Bash(New-Item -ItemType Directory -Force \"D:\\\\UNIDAD E\\\\PROYECTOS\\\\Almacen\\\\backend\\\\Scripts\")",
+      "Bash(Out-Null)",
+      "Bash(New-Item -ItemType Directory -Force \"D:\\\\UNIDAD E\\\\PROYECTOS\\\\Almacen\\\\backend\\\\Controllers\")",
+      "Bash(New-Item -ItemType Directory -Force \"D:\\\\UNIDAD E\\\\PROYECTOS\\\\Almacen\\\\backend\\\\Models\")",
+      "Bash(New-Item -ItemType Directory -Force \"D:\\\\UNIDAD E\\\\PROYECTOS\\\\Almacen\\\\backend\\\\Helpers\")",
+      "Bash(Write-Output \"Directorios creados\")",
+      "Bash(dotnet build *)",
+      "Bash(dotnet remove *)",
+      "Bash(dotnet sln *)"
+    ]
+  }
+}
