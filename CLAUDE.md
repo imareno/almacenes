@@ -4,15 +4,15 @@
 
 \## Stack
 
-\- Backend: .NET Core 8 Web API
+\- Backend:  .NET Core 8 Web API
 
 \- Base de datos: PostgreSQL
 
-\- Frontend: React 18 + Vite (segunda fase)
+\- Frontend: React + DevExtreme (template oficial DevExpress)
 
 \- ORM: Sin ORM — queries SQL directas con Dapper
 
-\- Auth: JWT con roles
+\- Auth: JWT propio — integrado al sistema de auth del template DevExtreme
 
 
 
@@ -24,9 +24,9 @@
 
 \- Sin interfaces salvo que sean absolutamente necesarias.
 
-\- Código simple, legible y funcional.
+\- Código simple, legible y funcional sobre código "elegante".
 
-\- Las existencias NO se almacenan — se calculan siempre en tiempo real:
+\- Las existencias NO se almacenan — se calculan en tiempo real:
 
 &#x20; EXISTENCIA = Σ ingresos - Σ salidas (por material, por almacén)
 
@@ -38,39 +38,53 @@
 
 /backend
 
-&#x20; Program.cs              → setup, DI, rutas, middleware
+Program.cs                → setup, DI, rutas, middleware, JWT
 
-&#x20; Controllers/
+Db.cs                     → conexión Dapper centralizada
 
-&#x20;   AuthController.cs
+Controllers/
 
-&#x20;   AlmacenController.cs
+AuthController.cs
 
-&#x20;   MaterialController.cs
+AlmacenController.cs
 
-&#x20;   CompraController.cs
+MaterialController.cs
 
-&#x20;   MovimientoController.cs
+CompraController.cs
 
-&#x20;   SolicitudController.cs
+MovimientoController.cs
 
-&#x20;   ReporteController.cs
+SolicitudController.cs
 
-&#x20; Models/                 → POCOs simples, sin lógica
+ReporteController.cs
 
-&#x20; Db.cs                   → conexión Dapper centralizada
+Models/                   → POCOs simples, sin lógica
 
-&#x20; Helpers/
+Helpers/
 
-&#x20;   PepsHelper.cs         → lógica de cálculo PEPS
+PepsHelper.cs            → lógica PEPS/FIFO
 
-&#x20;   JwtHelper.cs          → generación y validación JWT
+JwtHelper.cs             → generación y validación JWT
 
-&#x20; Scripts/
+Scripts/
 
-&#x20;   01\_schema.sql         → creación de tablas
+01\_schema.sql            → creación de tablas
 
-&#x20;   02\_seed.sql           → datos iniciales
+02\_seed.sql              → datos iniciales
+
+/frontend                   → React + DevExtreme template oficial
+
+src/
+
+api/                    → un archivo por módulo (almacen.js,
+
+material.js, compra.js, etc.)
+
+pages/                  → una página por pantalla
+
+components/             → solo si se reutiliza 2+ veces
+
+auth/                   → ajuste del auth DevExtreme → JWT propio
 
 
 
@@ -78,9 +92,7 @@
 
 
 
-\### Tablas principales
-
-
+```sql
 
 \-- Usuarios y roles
 
@@ -90,13 +102,13 @@ users           → id, username, password\_hash, role, active, created\_at
 
 
 
-\-- Almacenes
+\-- Almacenes (árbol con parent\_id)
 
 almacenes       → id, nombre, descripcion, parent\_id (null = raíz), active
 
 
 
-\-- Materiales / productos
+\-- Materiales
 
 materiales      → id, codigo, nombre, descripcion, unidad\_medida,
 
@@ -106,9 +118,7 @@ materiales      → id, codigo, nombre, descripcion, unidad\_medida,
 
 \-- Compras (cabecera)
 
-compras         → id, numero, proveedor, fecha, estado,
-
-&#x20;                  user\_id, created\_at
+compras         → id, numero, proveedor, fecha, estado, user\_id, created\_at
 
 &#x20; estados: 'borrador' | 'confirmada' | 'recibida'
 
@@ -122,29 +132,25 @@ compra\_items    → id, compra\_id, material\_id, cantidad,
 
 
 
-\-- Movimientos (ingresos y salidas — fuente de verdad)
+\-- Movimientos — fuente de verdad de existencias
 
 movimientos     → id, tipo, material\_id, almacen\_id, cantidad,
 
-&#x20;                  costo\_unitario, lote\_ref, fecha,
+&#x20;                  costo\_unitario, fecha, solicitud\_id,
 
-&#x20;                  solicitud\_id, compra\_item\_id,
-
-&#x20;                  user\_id, observacion, created\_at
+&#x20;                  compra\_item\_id, user\_id, observacion, created\_at
 
 &#x20; tipo: 'ingreso' | 'salida'
 
 
 
-\-- Solicitudes de materiales
+\-- Solicitudes
 
-solicitudes     → id, numero, solicitante\_id, almacen\_id,
+solicitudes     → id, numero, solicitante\_id, almacen\_id, estado,
 
-&#x20;                  estado, aprobador\_id, almacenero\_id,
+&#x20;                  aprobador\_id, almacenero\_id, fecha\_solicitud,
 
-&#x20;                  fecha\_solicitud, fecha\_aprobacion,
-
-&#x20;                  fecha\_despacho, fecha\_entrega,
+&#x20;                  fecha\_aprobacion, fecha\_despacho, fecha\_entrega,
 
 &#x20;                  observacion, created\_at
 
@@ -154,19 +160,13 @@ solicitudes     → id, numero, solicitante\_id, almacen\_id,
 
 \-- Detalle de solicitudes
 
-solicitud\_items → id, solicitud\_id, material\_id,
+solicitud\_items → id, solicitud\_id, material\_id, cantidad\_solicitada,
 
-&#x20;                  cantidad\_solicitada,
-
-&#x20;                  cantidad\_despachada,
-
-&#x20;                  cantidad\_entregada,
-
-&#x20;                  created\_at
+&#x20;                  cantidad\_despachada, cantidad\_entregada, created\_at
 
 
 
-\-- Lotes PEPS (FIFO)
+\-- Lotes PEPS/FIFO
 
 lotes           → id, material\_id, almacen\_id, cantidad\_inicial,
 
@@ -174,75 +174,75 @@ lotes           → id, material\_id, almacen\_id, cantidad\_inicial,
 
 &#x20;                  fecha\_ingreso, compra\_item\_id, created\_at
 
+```
+
 
 
 \## Flujo completo de solicitudes
 
 
 
-1\. SOLICITANTE crea solicitud
+SOLICITANTE crea solicitud
 
-&#x20;  → estado: "pendiente"
+→ estado: "pendiente"
 
-&#x20;  → registra: solicitante\_id, almacen\_id, items (cantidad\_solicitada)
+→ registra: solicitante\_id, almacen\_id, items (cantidad\_solicitada)
+
+APROBADOR aprueba o rechaza
+
+→ aprobada:  estado "aprobada"  | registra: aprobador\_id, fecha\_aprobacion
+
+→ rechazada: estado "rechazada" | registra: aprobador\_id, fecha\_aprobacion, observacion
+
+ALMACENERO despacha materiales
+
+→ estado: "despachada"
+
+→ registra: almacenero\_id, fecha\_despacho, cantidad\_despachada por item
+
+→ genera movimientos de salida aplicando lógica PEPS
+
+→ descuenta lotes correspondientes (fecha\_ingreso ASC)
+
+ALMACENERO confirma entrega física
+
+→ estado: "entregado"
+
+→ registra: fecha\_entrega, cantidad\_entregada por item
+
+→ NO genera movimientos — solo confirmación física
+
+→ fin del flujo
 
 
-
-2\. APROBADOR aprueba o rechaza
-
-&#x20;  → aprobada:  estado: "aprobada"  | registra: aprobador\_id, fecha\_aprobacion
-
-&#x20;  → rechazada: estado: "rechazada" | registra: aprobador\_id, fecha\_aprobacion, observacion
-
-
-
-3\. ALMACENERO despacha materiales
-
-&#x20;  → estado: "despachada"
-
-&#x20;  → registra: almacenero\_id, fecha\_despacho, cantidad\_despachada por item
-
-&#x20;  → genera movimientos de salida (aplica lógica PEPS)
-
-&#x20;  → descuenta lotes correspondientes
-
-
-
-4\. ALMACENERO confirma entrega física
-
-&#x20;  → estado: "entregado"
-
-&#x20;  → registra: fecha\_entrega, cantidad\_entregada por item
-
-&#x20;  → fin del flujo
 
 
 
 \## Reglas del flujo
 
-\- Solo el solicitante puede crear y cancelar sus solicitudes (si están en "pendiente")
+\- Solo el solicitante puede crear/cancelar sus solicitudes (estado "pendiente")
 
 \- Solo el aprobador puede aprobar o rechazar (estado "pendiente")
 
-\- Solo el almacenero puede despachar (estado "aprobada") y entregar (estado "despachada")
+\- Solo el almacenero puede despachar (estado "aprobada")
 
-\- El movimiento de salida se genera al despachar, no al entregar
+\- Solo el almacenero puede confirmar entrega (estado "despachada")
 
-\- La entrega es confirmación física — no afecta movimientos ni lotes
+\- El movimiento de salida se genera al DESPACHAR, no al entregar
 
-\- Un admin puede ejecutar cualquier acción
+\- Admin puede ejecutar cualquier acción
 
 
 
 \## Lógica PEPS (FIFO)
 
-1\. Cada ingreso (compra recibida o ingreso manual) crea un registro en lotes
+1\. Cada ingreso crea un registro en `lotes` con cantidad y costo
 
 2\. Al despachar: ordenar lotes por fecha\_ingreso ASC
 
-3\. Consumir el lote más antiguo hasta completar la cantidad despachada
+3\. Consumir lote más antiguo hasta completar cantidad despachada
 
-4\. Si un lote se agota, continuar con el siguiente
+4\. Si lote se agota, continuar con el siguiente
 
 5\. Costo de salida = suma ponderada de lotes consumidos
 
@@ -250,11 +250,15 @@ lotes           → id, material\_id, almacen\_id, cantidad\_inicial,
 
 
 
-\## Cálculo de existencias (en tiempo real)
+\## Cálculo de existencias (tiempo real, sin tabla de stock)
+
+```sql
 
 SELECT
 
-&#x20; material\_id, almacen\_id,
+&#x20; material\_id,
+
+&#x20; almacen\_id,
 
 &#x20; SUM(CASE WHEN tipo = 'ingreso' THEN cantidad ELSE -cantidad END) as existencia
 
@@ -263,6 +267,8 @@ FROM movimientos
 WHERE material\_id = @materialId AND almacen\_id = @almacenId
 
 GROUP BY material\_id, almacen\_id
+
+```
 
 
 
@@ -280,13 +286,13 @@ GROUP BY material\_id, almacen\_id
 
 
 
-\## Endpoints principales
+\## Endpoints backend
 
 
 
 \### Auth
 
-\- POST /api/auth/login
+\- POST /api/auth/login       → retorna JWT + datos de usuario
 
 \- POST /api/auth/refresh
 
@@ -294,7 +300,7 @@ GROUP BY material\_id, almacen\_id
 
 \### Almacenes
 
-\- GET    /api/almacenes
+\- GET    /api/almacenes               → árbol completo
 
 \- POST   /api/almacenes
 
@@ -308,7 +314,7 @@ GROUP BY material\_id, almacen\_id
 
 \- GET    /api/materiales
 
-\- GET    /api/materiales/{id}/existencia
+\- GET    /api/materiales/{id}/existencia   → calcula en tiempo real
 
 \- POST   /api/materiales
 
@@ -320,17 +326,17 @@ GROUP BY material\_id, almacen\_id
 
 \- GET    /api/compras
 
-\- POST   /api/compras
+\- POST   /api/compras                      → crea cabecera + items
 
 \- PUT    /api/compras/{id}/confirmar
 
-\- POST   /api/compras/{id}/recibir      → genera ingresos + lotes
+\- POST   /api/compras/{id}/recibir         → genera ingresos + lotes PEPS
 
 
 
 \### Movimientos
 
-\- GET    /api/movimientos
+\- GET    /api/movimientos                  → con filtros
 
 \- POST   /api/movimientos/ingreso
 
@@ -342,37 +348,161 @@ GROUP BY material\_id, almacen\_id
 
 \- GET    /api/solicitudes
 
-\- POST   /api/solicitudes               → solicitante
+\- POST   /api/solicitudes                  → solicitante
 
-\- PUT    /api/solicitudes/{id}/aprobar  → aprobador
+\- PUT    /api/solicitudes/{id}/aprobar     → aprobador
 
-\- PUT    /api/solicitudes/{id}/rechazar → aprobador
+\- PUT    /api/solicitudes/{id}/rechazar    → aprobador
 
-\- PUT    /api/solicitudes/{id}/despachar → almacenero → genera salidas PEPS
+\- PUT    /api/solicitudes/{id}/despachar   → almacenero + PEPS
 
-\- PUT    /api/solicitudes/{id}/entregar  → almacenero → confirma entrega física
+\- PUT    /api/solicitudes/{id}/entregar    → almacenero
 
 
 
 \### Reportes
 
-\- GET /api/reportes/existencias
+\- GET /api/reportes/existencias            → stock actual por almacén
 
-\- GET /api/reportes/kardex/{materialId}
+\- GET /api/reportes/kardex/{materialId}    → historial PEPS
 
-\- GET /api/reportes/valorizado
+\- GET /api/reportes/valorizado             → existencias × costo PEPS
 
-\- GET /api/reportes/compras
+\- GET /api/reportes/compras                → resumen por período
 
-\- GET /api/reportes/movimientos
+\- GET /api/reportes/movimientos            → entradas/salidas por período
+
+
+
+\## Frontend — React + DevExtreme
+
+
+
+\### Configuración inicial
+
+\- Usar DevExtreme React Application Template oficial
+
+\- Ajustar sistema de auth del template para consumir /api/auth/login
+
+\- Guardar JWT en localStorage con key 'auth\_token'
+
+\- Incluir JWT en header Authorization: Bearer {token} en cada request
+
+\- Redirigir a /login si JWT expirado o ausente
+
+
+
+\### DevExtreme — componentes a usar
+
+\- DataGrid    → todos los listados (materiales, compras, movimientos,
+
+&#x20;               solicitudes) con filtros, paginación y export Excel/PDF
+
+\- Chart       → reportes visuales (existencias, movimientos por período)
+
+\- Form        → formularios con validación
+
+\- TreeList    → árbol de almacenes y subalmacenes
+
+\- DateRangeBox → filtros de fecha en reportes
+
+\- SelectBox   → dropdowns de materiales, almacenes, usuarios
+
+
+
+\### Páginas
+
+\- /login
+
+\- /dashboard              → KPIs: existencias bajas, solicitudes pendientes,
+
+&#x20;                            últimos movimientos
+
+\- /almacenes              → TreeList con árbol de almacenes
+
+\- /materiales             → DataGrid + formulario ABM
+
+\- /compras                → DataGrid + nueva compra + recepción
+
+\- /movimientos            → DataGrid con filtros avanzados
+
+\- /solicitudes            → vista según rol:
+
+&#x20;   solicitante           → mis solicitudes + nueva solicitud
+
+&#x20;   aprobador             → bandeja pendientes
+
+&#x20;   almacenero            → despacho y entrega
+
+\- /reportes/existencias   → DataGrid con existencias por almacén
+
+\- /reportes/kardex        → DataGrid historial movimientos por material
+
+\- /reportes/valorizado    → DataGrid existencias valorizadas PEPS
+
+\- /reportes/compras       → Chart + DataGrid resumen compras
+
+\- /reportes/movimientos   → Chart + DataGrid entradas/salidas
+
+
+
+\### Estructura de archivos frontend
+
+src/
+
+api/
+
+auth.js
+
+almacenes.js
+
+materiales.js
+
+compras.js
+
+movimientos.js
+
+solicitudes.js
+
+reportes.js
+
+pages/
+
+Dashboard.js
+
+Almacenes.js
+
+Materiales.js
+
+Compras.js
+
+Movimientos.js
+
+Solicitudes.js
+
+reportes/
+
+Existencias.js
+
+Kardex.js
+
+Valorizado.js
+
+ComprasReporte.js
+
+MovimientosReporte.js
+
+components/
+
+RolGuard.js           → proteger rutas por rol
 
 
 
 \## Convenciones
 
-\- Español en nombres de negocio
+\- Español en labels, títulos y mensajes al usuario
 
-\- Inglés en nombres técnicos
+\- Inglés en nombres de componentes, variables y funciones
 
 \- Respuestas API siempre en JSON
 
@@ -382,9 +512,15 @@ GROUP BY material\_id, almacen\_id
 
 \- Paginación: ?page=1\&pageSize=20
 
+\- No duplicar lógica de negocio — el backend es la fuente de verdad
 
 
-\## Paquetes autorizados (backend)
+
+\## Paquetes autorizados
+
+
+
+\### Backend
 
 \- Dapper
 
@@ -395,6 +531,16 @@ GROUP BY material\_id, almacen\_id
 \- BCrypt.Net-Next
 
 \- Swashbuckle (Swagger)
+
+
+
+\### Frontend
+
+\- devextreme
+
+\- devextreme-react
+
+\- axios (llamadas HTTP)
 
 
 
@@ -424,9 +570,25 @@ GROUP BY material\_id, almacen\_id
 
 
 
-\### Fase 2 — Frontend React \[ ]
+\### Fase 2 — Frontend \[ ]
 
-(pendiente hasta completar backend)
+\- \[ ] Setup DevExtreme React template
+
+\- \[ ] Ajuste auth → JWT propio
+
+\- \[ ] Dashboard
+
+\- \[ ] Almacenes
+
+\- \[ ] Materiales
+
+\- \[ ] Compras
+
+\- \[ ] Movimientos
+
+\- \[ ] Solicitudes (vistas por rol)
+
+\- \[ ] Reportes (5 reportes)
 
 
 
@@ -434,11 +596,13 @@ GROUP BY material\_id, almacen\_id
 
 1\. Leer este archivo
 
-2\. Revisar qué módulos están marcados como completos
+2\. Revisar qué módulos están marcados como completos ✅
 
-3\. Preguntar por cuál módulo continuar si no es claro
+3\. Leer el código existente para entender el estado real
 
-4\. Mantener arquitectura plana — no agregar capas sin consultar
+4\. Preguntar por cuál módulo continuar si no es claro
 
-5\. No instalar paquetes adicionales sin aprobación
+5\. Mantener arquitectura plana — no agregar capas sin consultar
+
+6\. No instalar paquetes sin aprobación previa
 
