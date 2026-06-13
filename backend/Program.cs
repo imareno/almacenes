@@ -21,6 +21,9 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 builder.Services.AddAuthorization();
 
+// ── HttpClient ────────────────────────────────────────────────
+builder.Services.AddHttpClient();
+
 // ── Controllers ───────────────────────────────────────────────
 builder.Services.AddControllers()
     .AddJsonOptions(o =>

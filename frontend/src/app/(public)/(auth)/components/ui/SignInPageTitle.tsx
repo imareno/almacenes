@@ -10,15 +10,15 @@ function SignInPageTitle() {
 				alt="logo"
 			/>
 
-			<Typography className="mt-8 text-4xl leading-[1.25] font-extrabold tracking-tight">Sign in</Typography>
+			<Typography className="mt-8 text-4xl leading-[1.25] font-extrabold tracking-tight">
+				Autenticación
+			</Typography>
 			<div className="mt-0.5 flex items-baseline font-medium">
-				<Typography>Don't have an account?</Typography>
+				<Typography>Ingresa tu usuario y password</Typography>
 				<Link
 					className="ml-1"
 					to="/sign-up"
-				>
-					Sign up
-				</Link>
+				></Link>
 			</div>
 		</div>
 	);

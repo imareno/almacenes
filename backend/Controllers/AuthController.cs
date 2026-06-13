@@ -3,6 +3,8 @@ using Dapper;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Security.Claims;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Almacen.Controllers;
 
@@ -10,13 +12,17 @@ namespace Almacen.Controllers;
 [Route("api/auth")]
 public class AuthController : ControllerBase
 {
-    private readonly Db         _db;
-    private readonly JwtHelper  _jwt;
+    private readonly Db                  _db;
+    private readonly JwtHelper           _jwt;
+    private readonly IHttpClientFactory  _httpFactory;
 
-    public AuthController(Db db, JwtHelper jwt)
+    private const string ServicioExternoUrl = "https://hades.oopp.gob.bo/seguridad/api/get_token/";
+
+    public AuthController(Db db, JwtHelper jwt, IHttpClientFactory httpFactory)
     {
-        _db  = db;
-        _jwt = jwt;
+        _db          = db;
+        _jwt         = jwt;
+        _httpFactory = httpFactory;
     }
 
     // POST /api/auth/login
@@ -26,21 +32,43 @@ public class AuthController : ControllerBase
         if (string.IsNullOrWhiteSpace(req.Username) || string.IsNullOrWhiteSpace(req.Password))
             return BadRequest(new { error = "Usuario y contraseña son requeridos" });
 
-        using var conn = _db.CreateConnection();
+        // Llamar al servicio externo de autenticación
+        var client   = _httpFactory.CreateClient();
+        var payload  = JsonSerializer.Serialize(new { username = req.Username.Trim(), password = req.Password });
+        var content  = new StringContent(payload, System.Text.Encoding.UTF8, "application/json");
 
-        var user = await conn.QuerySingleOrDefaultAsync<UserLogin>(
-            "SELECT id, username, password_hash, role, active FROM users WHERE username = @username",
-            new { username = req.Username.Trim() });
+        HttpResponseMessage respuesta;
+        try
+        {
+            respuesta = await client.PostAsync(ServicioExternoUrl, content);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(503, new { error = "Servicio de autenticación no disponible", detalle = ex.Message });
+        }
 
-        if (user is null || !user.Active || !BCrypt.Net.BCrypt.Verify(req.Password, user.PasswordHash))
+        var body = await respuesta.Content.ReadAsStringAsync();
+
+        if (!respuesta.IsSuccessStatusCode)
             return Unauthorized(new { error = "Credenciales inválidas" });
 
-        var token = _jwt.GenerateToken(user.Id, user.Username, user.Role);
+        // Extraer el token del servicio externo
+        var resultado = JsonSerializer.Deserialize<RespuestaToken>(body);
 
+        if (resultado?.Token is null)
+            return Unauthorized(new { error = "Credenciales inválidas" });
+
+        // Por ahora retornamos el token externo directamente al frontend
         return Ok(new
         {
-            token,
-            user = new { user.Id, user.Username, user.Role }
+            token         = resultado.Token,
+            externalToken = resultado.Token,
+            user = new
+            {
+                id       = "0",
+                username = req.Username.Trim(),
+                role     = "user"
+            }
         });
     }
 
@@ -70,8 +98,13 @@ public class AuthController : ControllerBase
         });
     }
 
-    private record UserLogin(int Id, string Username, string PasswordHash, string Role, bool Active);
     private record UserRefresh(int Id, string Username, string Role, bool Active);
+
+    private class RespuestaToken
+    {
+        [JsonPropertyName("token")]
+        public string? Token { get; set; }
+    }
 }
 
 public record LoginRequest(string Username, string Password);

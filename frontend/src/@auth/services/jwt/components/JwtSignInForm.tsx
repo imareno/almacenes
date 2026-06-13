@@ -4,6 +4,7 @@ import { z } from 'zod';
 import _ from 'lodash';
 import TextField from '@mui/material/TextField';
 import Button from '@mui/material/Button';
+import { useSnackbar } from 'notistack';
 import useJwtAuth from '../useJwtAuth';
 
 const schema = z.object({
@@ -20,21 +21,22 @@ const defaultValues: FormType = {
 
 function JwtSignInForm() {
 	const { signIn } = useJwtAuth();
+	const { enqueueSnackbar } = useSnackbar();
 
-	const { control, formState, handleSubmit, setError } = useForm<FormType>({
+	const { control, formState, handleSubmit } = useForm<FormType>({
 		mode: 'onChange',
 		defaultValues,
 		resolver: zodResolver(schema)
 	});
 
-	const { isValid, dirtyFields, errors } = formState;
+	const { isValid, dirtyFields } = formState;
 
 	function onSubmit(formData: FormType) {
-		signIn(formData).catch(async (error) => {
-			const body = await error?.response?.json?.().catch(() => null);
-			const message = body?.error || 'Credenciales inválidas';
-			setError('username', { type: 'manual', message });
-			setError('password', { type: 'manual', message: ' ' });
+		signIn(formData).catch(async () => {
+			enqueueSnackbar('Usuario o contraseña incorrectos. Por favor, intente nuevamente.', {
+				variant: 'error',
+				autoHideDuration: 5000
+			});
 		});
 	}
 
@@ -55,8 +57,8 @@ function JwtSignInForm() {
 						label="Usuario"
 						autoFocus
 						autoComplete="username"
-						error={!!errors.username}
-						helperText={errors?.username?.message}
+						error={false}
+						helperText=""
 						variant="outlined"
 						required
 						fullWidth
@@ -74,8 +76,8 @@ function JwtSignInForm() {
 						label="Contraseña"
 						type="password"
 						autoComplete="current-password"
-						error={!!errors.password && errors.password.message !== ' '}
-						helperText={errors?.password?.message !== ' ' ? errors?.password?.message : ''}
+						error={false}
+						helperText=""
 						variant="outlined"
 						required
 						fullWidth

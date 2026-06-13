@@ -1,5 +1,6 @@
 import FuseLayout from '@fuse/core/FuseLayout';
 import { SnackbarProvider } from 'notistack';
+import ErrorNotification from 'src/components/notifications/ErrorNotification';
 import themeLayouts from 'src/components/theme-layouts/themeLayouts';
 import FuseSettingsProvider from '@fuse/core/FuseSettings/FuseSettingsProvider';
 import { I18nProvider } from '@i18n/I18nProvider';
@@ -65,6 +66,7 @@ function App() {
 																containerRoot:
 																	'bottom-0 right-0 mb-13 md:mb-17 mr-2 lg:mr-20 z-99'
 															}}
+															Components={{ error: ErrorNotification }}
 														>
 															<QuickPanelProvider>
 																<FuseLayout layouts={themeLayouts} />
