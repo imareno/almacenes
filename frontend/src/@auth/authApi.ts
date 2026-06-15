@@ -5,6 +5,9 @@ import { PartialDeep } from 'type-fest';
 type BackendUser = {
 	id: number;
 	username: string;
+	email?: string;
+	nombreCompleto?: string;
+	fotografia?: string;
 	role: string;
 };
 
@@ -18,12 +21,15 @@ export type AuthSession = {
 	user: User;
 };
 
+const FOTO_BASE_URL = 'https://hades.oopp.gob.bo/';
+
 function mapUser(bu: BackendUser): User {
 	return {
 		id: String(bu.id),
 		role: bu.role,
-		displayName: bu.username,
-		email: '',
+		displayName: bu.nombreCompleto ?? bu.username,
+		email: bu.email ?? '',
+		photoURL: bu.fotografia ? `${FOTO_BASE_URL}${bu.fotografia}` : '',
 		shortcuts: [],
 		settings: {},
 		loginRedirectUrl: '/'
@@ -52,6 +58,14 @@ export async function authSignInWithToken(accessToken: string): Promise<AuthSess
 
 export async function authRefreshToken(): Promise<Response> {
 	return api.post('auth/refresh', { retry: 0 });
+}
+
+export async function authSignOut(): Promise<void> {
+	try {
+		await api.post('auth/logout');
+	} catch {
+		// Si falla el logout remoto igual limpiamos la sesión local
+	}
 }
 
 // Sin registro propio — los usuarios los crea el admin

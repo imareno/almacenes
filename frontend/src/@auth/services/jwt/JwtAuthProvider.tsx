@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useImperativeHandle } from 'react';
 import { FuseAuthProviderComponentProps, FuseAuthProviderState } from '@fuse/core/FuseAuthProvider/types/FuseAuthTypes';
 import useLocalStorage from '@fuse/hooks/useLocalStorage';
-import { authRefreshToken, authSignIn, authSignInWithToken, authSignUp, authUpdateDbUser } from '@auth/authApi';
+import { authRefreshToken, authSignIn, authSignInWithToken, authSignOut, authSignUp, authUpdateDbUser } from '@auth/authApi';
 import { User } from '../../user';
 import { removeGlobalHeaders, setGlobalHeaders } from '@/utils/api';
 import { isTokenValid } from './utils/jwtUtils';
@@ -145,6 +145,7 @@ function JwtAuthProvider(props: FuseAuthProviderComponentProps) {
 	 * Sign out
 	 */
 	const signOut: JwtAuthContextType['signOut'] = useCallback(() => {
+		authSignOut(); // registra cierre de sesión en el backend (fire-and-forget)
 		removeTokenStorageValue();
 		removeGlobalHeaders(['Authorization']);
 		setAuthState({

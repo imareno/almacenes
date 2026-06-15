@@ -109,3 +109,26 @@ public class Lote
     public int?     CompraItemId       { get; set; }
     public DateTime CreatedAt          { get; set; }
 }
+
+public class AlmacenEncargado
+{
+    public int      AlmacenId  { get; set; }
+    public int      UserId     { get; set; }
+    public bool     Active     { get; set; }
+    public DateTime CreatedAt  { get; set; }
+}
+
+public class Sesion
+{
+    public int       Id               { get; set; }
+    public int       UserId           { get; set; }
+    public string    Username         { get; set; } = "";
+    public string?   IpAddress        { get; set; }
+    public string?   UserAgent        { get; set; }
+    public string?   TokenHash        { get; set; }
+    public DateTime  FechaLogin       { get; set; }
+    public DateTime? FechaExpiracion  { get; set; }
+    public DateTime? FechaLogout      { get; set; }
+    public string    Estado           { get; set; } = "activa";
+    public DateTime  CreatedAt        { get; set; }
+}

@@ -3,6 +3,8 @@ using Dapper;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -12,17 +14,20 @@ namespace Almacen.Controllers;
 [Route("api/auth")]
 public class AuthController : ControllerBase
 {
-    private readonly Db                  _db;
-    private readonly JwtHelper           _jwt;
-    private readonly IHttpClientFactory  _httpFactory;
+    private readonly Db                 _db;
+    private readonly JwtHelper          _jwt;
+    private readonly IHttpClientFactory _httpFactory;
+    private readonly IConfiguration     _config;
 
-    private const string ServicioExternoUrl = "https://hades.oopp.gob.bo/seguridad/api/get_token/";
+    private const string UrlGetToken   = "https://hades.oopp.gob.bo/seguridad/api/get_token/";
+    private const string UrlGetUsuario = "https://hades.oopp.gob.bo/seguridad/api/get_usuario/";
 
-    public AuthController(Db db, JwtHelper jwt, IHttpClientFactory httpFactory)
+    public AuthController(Db db, JwtHelper jwt, IHttpClientFactory httpFactory, IConfiguration config)
     {
         _db          = db;
         _jwt         = jwt;
         _httpFactory = httpFactory;
+        _config      = config;
     }
 
     // POST /api/auth/login
@@ -32,44 +37,121 @@ public class AuthController : ControllerBase
         if (string.IsNullOrWhiteSpace(req.Username) || string.IsNullOrWhiteSpace(req.Password))
             return BadRequest(new { error = "Usuario y contraseña son requeridos" });
 
-        // Llamar al servicio externo de autenticación
-        var client   = _httpFactory.CreateClient();
-        var payload  = JsonSerializer.Serialize(new { username = req.Username.Trim(), password = req.Password });
-        var content  = new StringContent(payload, System.Text.Encoding.UTF8, "application/json");
+        var client = _httpFactory.CreateClient();
 
-        HttpResponseMessage respuesta;
+        // 1. Obtener hash del servicio externo
+        var payload = JsonSerializer.Serialize(new { username = req.Username.Trim(), password = req.Password });
+        var content = new StringContent(payload, Encoding.UTF8, "application/json");
+
+        HttpResponseMessage respToken;
         try
         {
-            respuesta = await client.PostAsync(ServicioExternoUrl, content);
+            respToken = await client.PostAsync(UrlGetToken, content);
         }
         catch (Exception ex)
         {
             return StatusCode(503, new { error = "Servicio de autenticación no disponible", detalle = ex.Message });
         }
 
-        var body = await respuesta.Content.ReadAsStringAsync();
-
-        if (!respuesta.IsSuccessStatusCode)
+        if (!respToken.IsSuccessStatusCode)
             return Unauthorized(new { error = "Credenciales inválidas" });
 
-        // Extraer el token del servicio externo
-        var resultado = JsonSerializer.Deserialize<RespuestaToken>(body);
+        var bodyToken  = await respToken.Content.ReadAsStringAsync();
+        var tokenData  = JsonSerializer.Deserialize<RespuestaToken>(bodyToken);
 
-        if (resultado?.Token is null)
+        if (string.IsNullOrWhiteSpace(tokenData?.Token))
             return Unauthorized(new { error = "Credenciales inválidas" });
 
-        // Por ahora retornamos el token externo directamente al frontend
+        // 2. Obtener datos del usuario con el hash recibido
+        var reqUsuario = new HttpRequestMessage(HttpMethod.Get, UrlGetUsuario);
+        reqUsuario.Headers.Add("Authorization", $"Token {tokenData.Token}");
+
+        HttpResponseMessage respUsuario;
+        try
+        {
+            respUsuario = await client.SendAsync(reqUsuario);
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(503, new { error = "Error al obtener datos del usuario", detalle = ex.Message });
+        }
+
+        if (!respUsuario.IsSuccessStatusCode)
+            return StatusCode(502, new { error = "No se pudieron obtener los datos del usuario" });
+
+        var bodyUsuario  = await respUsuario.Content.ReadAsStringAsync();
+        var usuarioExt   = JsonSerializer.Deserialize<UsuarioExterno>(bodyUsuario);
+
+        if (usuarioExt is null || usuarioExt.Id <= 0)
+            return StatusCode(502, new { error = "Respuesta inválida del servicio de usuarios" });
+
+        // 3. Determinar rol: almacenero si está en almacen_encargado, si no "user"
+        using var conn = _db.CreateConnection();
+        var esEncargado = await conn.ExecuteScalarAsync<bool>(
+            "SELECT EXISTS(SELECT 1 FROM almacen_encargado WHERE user_id = @uid AND active = true)",
+            new { uid = usuarioExt.Id });
+
+        var role = esEncargado ? "almacenero" : "user";
+
+        // 4. Generar JWT propio con nombre y foto en los claims
+        var token = _jwt.GenerateToken(
+            usuarioExt.Id,
+            usuarioExt.Username,
+            role,
+            usuarioExt.Persona?.NombreCompleto,
+            usuarioExt.Persona?.Fotografia);
+
+        // 5. Registrar sesión
+        var expMinutes = int.Parse(_config["Jwt:ExpirationMinutes"] ?? "60");
+
+        await conn.ExecuteAsync(@"
+            INSERT INTO sesiones (user_id, username, ip_address, user_agent, token_hash, fecha_expiracion)
+            VALUES (@userId, @username, @ip, @ua, @hash, @exp)",
+            new
+            {
+                userId   = usuarioExt.Id,
+                username = usuarioExt.Username,
+                ip       = HttpContext.Connection.RemoteIpAddress?.ToString(),
+                ua       = Request.Headers.UserAgent.ToString(),
+                hash     = ComputeSha256(token),
+                exp      = DateTime.UtcNow.AddMinutes(expMinutes)
+            });
+
         return Ok(new
         {
-            token         = resultado.Token,
-            externalToken = resultado.Token,
+            token,
             user = new
             {
-                id       = "0",
-                username = req.Username.Trim(),
-                role     = "user"
+                id             = usuarioExt.Id,
+                username       = usuarioExt.Username,
+                email          = usuarioExt.Email,
+                nombreCompleto = usuarioExt.Persona?.NombreCompleto,
+                fotografia     = usuarioExt.Persona?.Fotografia,
+                role
             }
         });
+    }
+
+    // POST /api/auth/logout
+    [HttpPost("logout")]
+    [Authorize]
+    public async Task<IActionResult> Logout()
+    {
+        var authHeader = Request.Headers.Authorization.ToString();
+        var token      = authHeader.StartsWith("Bearer ") ? authHeader[7..] : null;
+
+        if (token is not null)
+        {
+            var tokenHash = ComputeSha256(token);
+            using var conn = _db.CreateConnection();
+            await conn.ExecuteAsync(@"
+                UPDATE sesiones
+                SET estado = 'cerrada', fecha_logout = NOW()
+                WHERE token_hash = @hash AND estado = 'activa'",
+                new { hash = tokenHash });
+        }
+
+        return Ok(new { mensaje = "Sesión cerrada" });
     }
 
     // POST /api/auth/refresh
@@ -82,28 +164,69 @@ public class AuthController : ControllerBase
 
         using var conn = _db.CreateConnection();
 
-        var user = await conn.QuerySingleOrDefaultAsync<UserRefresh>(
-            "SELECT id, username, role, active FROM users WHERE id = @userId",
-            new { userId });
+        // Re-verificar rol por si cambió la asignación de encargado
+        var esEncargado = await conn.ExecuteScalarAsync<bool>(
+            "SELECT EXISTS(SELECT 1 FROM almacen_encargado WHERE user_id = @uid AND active = true)",
+            new { uid = userId });
 
-        if (user is null || !user.Active)
-            return Unauthorized(new { error = "Usuario inactivo o no encontrado" });
-
-        var token = _jwt.GenerateToken(user.Id, user.Username, user.Role);
+        var role  = esEncargado ? "almacenero" : "user";
+        var token = _jwt.GenerateToken(userId, username, role);
 
         return Ok(new
         {
             token,
-            user = new { user.Id, user.Username, user.Role }
+            user = new { id = userId, username, role }
         });
     }
 
-    private record UserRefresh(int Id, string Username, string Role, bool Active);
+    private static string ComputeSha256(string input)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(input));
+        return Convert.ToHexString(bytes).ToLowerInvariant();
+    }
+
+    // ── Modelos internos ──────────────────────────────────────────────────────
 
     private class RespuestaToken
     {
         [JsonPropertyName("token")]
         public string? Token { get; set; }
+    }
+
+    private class UsuarioExterno
+    {
+        [JsonPropertyName("id")]
+        public int Id { get; set; }
+
+        [JsonPropertyName("username")]
+        public string Username { get; set; } = "";
+
+        [JsonPropertyName("email")]
+        public string Email { get; set; } = "";
+
+        [JsonPropertyName("persona")]
+        public PersonaExterna? Persona { get; set; }
+    }
+
+    private class PersonaExterna
+    {
+        [JsonPropertyName("nombre_completo")]
+        public string? NombreCompleto { get; set; }
+
+        [JsonPropertyName("nombres")]
+        public string? Nombres { get; set; }
+
+        [JsonPropertyName("apellido_paterno")]
+        public string? ApellidoPaterno { get; set; }
+
+        [JsonPropertyName("cargo")]
+        public string? Cargo { get; set; }
+
+        [JsonPropertyName("ci")]
+        public string? Ci { get; set; }
+
+        [JsonPropertyName("fotografia")]
+        public string? Fotografia { get; set; }
     }
 }
 
