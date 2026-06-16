@@ -85,37 +85,45 @@ public class AuthController : ControllerBase
         if (usuarioExt is null || usuarioExt.Id <= 0)
             return StatusCode(502, new { error = "Respuesta inválida del servicio de usuarios" });
 
-        // 3. Determinar rol: almacenero si está en almacen_encargado, si no "user"
-        using var conn = _db.CreateConnection();
-        var esEncargado = await conn.ExecuteScalarAsync<bool>(
-            "SELECT EXISTS(SELECT 1 FROM almacen_encargado WHERE user_id = @uid AND active = true)",
-            new { uid = usuarioExt.Id });
+        // 3. Determinar rol (opcional — si la BD no está disponible, rol por defecto "user")
+        var role = "user";
+        try
+        {
+            using var conn = _db.CreateConnection();
+            var esEncargado = await conn.ExecuteScalarAsync<bool>(
+                "SELECT EXISTS(SELECT 1 FROM almacen_encargado WHERE user_id = @uid AND active = true)",
+                new { uid = usuarioExt.Id });
+            role = esEncargado ? "almacenero" : "user";
+        }
+        catch { /* BD no disponible — rol por defecto "user" */ }
 
-        var role = esEncargado ? "almacenero" : "user";
-
-        // 4. Generar JWT propio con nombre y foto en los claims
+        // 4. Generar JWT con nombre y foto en los claims
         var token = _jwt.GenerateToken(
             usuarioExt.Id,
             usuarioExt.Username,
             role,
-            usuarioExt.Persona?.NombreCompleto,
+            usuarioExt.Persona?.Nombres,
             usuarioExt.Persona?.Fotografia);
 
-        // 5. Registrar sesión
-        var expMinutes = int.Parse(_config["Jwt:ExpirationMinutes"] ?? "60");
-
-        await conn.ExecuteAsync(@"
-            INSERT INTO sesiones (user_id, username, ip_address, user_agent, token_hash, fecha_expiracion)
-            VALUES (@userId, @username, @ip, @ua, @hash, @exp)",
-            new
-            {
-                userId   = usuarioExt.Id,
-                username = usuarioExt.Username,
-                ip       = HttpContext.Connection.RemoteIpAddress?.ToString(),
-                ua       = Request.Headers.UserAgent.ToString(),
-                hash     = ComputeSha256(token),
-                exp      = DateTime.UtcNow.AddMinutes(expMinutes)
-            });
+        // 5. Registrar sesión (opcional)
+        try
+        {
+            using var conn2 = _db.CreateConnection();
+            var expMinutes  = int.Parse(_config["Jwt:ExpirationMinutes"] ?? "60");
+            await conn2.ExecuteAsync(@"
+                INSERT INTO sesiones (user_id, username, ip_address, user_agent, token_hash, fecha_expiracion)
+                VALUES (@userId, @username, @ip, @ua, @hash, @exp)",
+                new
+                {
+                    userId   = usuarioExt.Id,
+                    username = usuarioExt.Username,
+                    ip       = HttpContext.Connection.RemoteIpAddress?.ToString(),
+                    ua       = Request.Headers.UserAgent.ToString(),
+                    hash     = ComputeSha256(token),
+                    exp      = DateTime.UtcNow.AddMinutes(expMinutes)
+                });
+        }
+        catch { /* BD no disponible — sin registro de sesión */ }
 
         return Ok(new
         {

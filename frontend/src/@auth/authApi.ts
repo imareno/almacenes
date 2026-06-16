@@ -1,19 +1,16 @@
 import api, { setGlobalHeaders } from '@/utils/api';
 import { User } from '@auth/user';
 import { PartialDeep } from 'type-fest';
+import { jwtDecode } from 'jwt-decode';
 
-type BackendUser = {
-	id: number;
-	username: string;
-	email?: string;
-	nombreCompleto?: string;
-	fotografia?: string;
+const FOTO_BASE_URL = 'https://hades.oopp.gob.bo/media/';
+
+type JwtClaims = {
+	sub: string;
+	unique_name: string;
 	role: string;
-};
-
-type BackendAuthResponse = {
-	token: string;
-	user: BackendUser;
+	nombre?: string;
+	foto?: string;
 };
 
 export type AuthSession = {
@@ -21,24 +18,32 @@ export type AuthSession = {
 	user: User;
 };
 
-const FOTO_BASE_URL = 'https://hades.oopp.gob.bo/';
+function toTitleCase(str: string): string {
+	return str
+		.toLowerCase()
+		.split(' ')
+		.map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+		.join(' ');
+}
 
-function mapUser(bu: BackendUser): User {
+export function mapUserFromToken(token: string): User {
+	const claims = jwtDecode<JwtClaims>(token);
+	const rawName = claims.nombre ?? claims.unique_name;
 	return {
-		id: String(bu.id),
-		role: bu.role,
-		displayName: bu.nombreCompleto ?? bu.username,
-		email: bu.email ?? '',
-		photoURL: bu.fotografia ? `${FOTO_BASE_URL}${bu.fotografia}` : '',
+		id: claims.sub,
+		role: claims.role,
+		displayName: toTitleCase(rawName),
+		email: '',
+		photoURL: claims.foto ? `${FOTO_BASE_URL}${claims.foto}` : '',
 		shortcuts: [],
 		settings: {},
-		loginRedirectUrl: '/'
+		loginRedirectUrl: '/example'
 	};
 }
 
 export async function authSignIn(credentials: { username: string; password: string }): Promise<AuthSession> {
-	const data = await api.post('auth/login', { json: credentials }).json<BackendAuthResponse>();
-	return { access_token: data.token, user: mapUser(data.user) };
+	const data = await api.post('auth/login', { json: credentials }).json<{ token: string }>();
+	return { access_token: data.token, user: mapUserFromToken(data.token) };
 }
 
 export async function authSignInWithToken(accessToken: string): Promise<AuthSession | false> {
@@ -48,9 +53,9 @@ export async function authSignInWithToken(accessToken: string): Promise<AuthSess
 				headers: { Authorization: `Bearer ${accessToken}` },
 				retry: 0
 			})
-			.json<BackendAuthResponse>();
+			.json<{ token: string }>();
 		setGlobalHeaders({ Authorization: `Bearer ${data.token}` });
-		return { access_token: data.token, user: mapUser(data.user) };
+		return { access_token: data.token, user: mapUserFromToken(data.token) };
 	} catch {
 		return false;
 	}
@@ -68,7 +73,6 @@ export async function authSignOut(): Promise<void> {
 	}
 }
 
-// Sin registro propio — los usuarios los crea el admin
 export async function authSignUp(_data: {
 	displayName: string;
 	email: string;

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useImperativeHandle } from 'react';
 import { FuseAuthProviderComponentProps, FuseAuthProviderState } from '@fuse/core/FuseAuthProvider/types/FuseAuthTypes';
 import useLocalStorage from '@fuse/hooks/useLocalStorage';
-import { authRefreshToken, authSignIn, authSignInWithToken, authSignOut, authSignUp, authUpdateDbUser } from '@auth/authApi';
+import { authRefreshToken, authSignIn, authSignInWithToken, authSignUp, authUpdateDbUser, mapUserFromToken } from '@auth/authApi';
 import { User } from '../../user';
 import { removeGlobalHeaders, setGlobalHeaders } from '@/utils/api';
 import { isTokenValid } from './utils/jwtUtils';
@@ -56,12 +56,9 @@ function JwtAuthProvider(props: FuseAuthProviderComponentProps) {
 			const accessToken = tokenStorageValue;
 
 			if (isTokenValid(accessToken)) {
-				const session = await authSignInWithToken(accessToken);
-				if (session) {
-					setTokenStorageValue(session.access_token);
-					setGlobalHeaders({ Authorization: `Bearer ${session.access_token}` });
-					return session.user;
-				}
+				// Token válido — restaurar sesión desde claims locales sin llamar al backend
+				setGlobalHeaders({ Authorization: `Bearer ${accessToken}` });
+				return mapUserFromToken(accessToken);
 			}
 
 			return false;
@@ -145,7 +142,6 @@ function JwtAuthProvider(props: FuseAuthProviderComponentProps) {
 	 * Sign out
 	 */
 	const signOut: JwtAuthContextType['signOut'] = useCallback(() => {
-		authSignOut(); // registra cierre de sesión en el backend (fire-and-forget)
 		removeTokenStorageValue();
 		removeGlobalHeaders(['Authorization']);
 		setAuthState({
@@ -210,46 +206,6 @@ function JwtAuthProvider(props: FuseAuthProviderComponentProps) {
 		signOut,
 		updateUser
 	}));
-
-	/**
-	 * Intercept fetch requests to refresh the access token
-	 */
-	const interceptFetch = useCallback(() => {
-		const { fetch: originalFetch } = window;
-
-		window.fetch = async (...args) => {
-			const [resource, config] = args;
-			try {
-				const response = await originalFetch(resource, config);
-				const newAccessToken = response.headers.get('New-Access-Token');
-
-				if (newAccessToken) {
-					setGlobalHeaders({ Authorization: `Bearer ${newAccessToken}` });
-					setTokenStorageValue(newAccessToken);
-				}
-
-				if (response.status === 401) {
-					signOut();
-					console.error('Unauthorized request. User was signed out.');
-				}
-
-				return response;
-			} catch (error) {
-				if (error instanceof HTTPError && error.response.status === 401) {
-					signOut();
-					console.error('Unauthorized request. User was signed out.');
-				}
-
-				throw error;
-			}
-		};
-	}, [setTokenStorageValue, signOut]);
-
-	useEffect(() => {
-		if (authState.isAuthenticated) {
-			interceptFetch();
-		}
-	}, [authState.isAuthenticated, interceptFetch]);
 
 	return <JwtAuthContext value={authContextValue}>{children}</JwtAuthContext>;
 }
