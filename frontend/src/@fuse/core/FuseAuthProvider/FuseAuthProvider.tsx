@@ -68,6 +68,12 @@ function FuseAuthProvider(props: FuseAuthenticationProviderProps) {
 					return { ...providerAuthState, provider: name };
 				}
 
+				// Scenario 4: Initial unauthenticated check completed — update authStatus from null
+				if (prev.authStatus === null && !providerAuthState.isAuthenticated &&
+					providerAuthState.authStatus !== 'configuring') {
+					return { ...providerAuthState, provider: null };
+				}
+
 				return prev;
 			});
 		},
@@ -81,10 +87,10 @@ function FuseAuthProvider(props: FuseAuthenticationProviderProps) {
 	}, [onAuthStateChanged, authState]);
 
 	useEffect(() => {
-		if (allProvidersReady && currentAuthStatus !== 'configuring') {
+		if (allProvidersReady) {
 			setIsLoading(false);
 		}
-	}, [allProvidersReady, currentAuthStatus]);
+	}, [allProvidersReady]);
 
 	const signOut = useCallback(() => {
 		if (currentProvider) {

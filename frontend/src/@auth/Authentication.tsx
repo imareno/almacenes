@@ -1,27 +1,16 @@
 import React from 'react';
 
-import AWSAuthProvider from '@auth/services/aws/AWSAuthProvider';
-import FirebaseAuthProvider from '@auth/services/firebase/FirebaseAuthProvider';
 import JwtAuthProvider from '@auth/services/jwt/JwtAuthProvider';
 import { FuseAuthProviderType } from '@fuse/core/FuseAuthProvider/types/FuseAuthTypes';
 import FuseAuthProvider from '@fuse/core/FuseAuthProvider';
 import FuseAuthorization from '@fuse/core/FuseAuthorization';
 import { User } from '@auth/user';
-/**
- * The Authentication providers.
- */
+import settingsConfig from '@/configs/settingsConfig';
+
 const authProviders: FuseAuthProviderType[] = [
 	{
 		name: 'jwt',
 		Provider: JwtAuthProvider
-	},
-	{
-		name: 'aws',
-		Provider: AWSAuthProvider
-	},
-	{
-		name: 'firebase',
-		Provider: FirebaseAuthProvider
 	}
 ];
 
@@ -36,7 +25,14 @@ function Authentication(props: AuthenticationProps) {
 		<FuseAuthProvider providers={authProviders}>
 			{(authState) => {
 				const userRole = authState?.user?.role as User['role'];
-				return <FuseAuthorization userRole={userRole}>{children}</FuseAuthorization>;
+				return (
+					<FuseAuthorization
+						userRole={userRole}
+						loginRedirectUrl={settingsConfig.loginRedirectUrl}
+					>
+						{children}
+					</FuseAuthorization>
+				);
 			}}
 		</FuseAuthProvider>
 	);

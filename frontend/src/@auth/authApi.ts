@@ -28,16 +28,16 @@ function toTitleCase(str: string): string {
 
 export function mapUserFromToken(token: string): User {
 	const claims = jwtDecode<JwtClaims>(token);
-	const rawName = claims.nombre ?? claims.unique_name;
+	const rawName = claims.nombre ?? claims.unique_name ?? claims.sub ?? 'Usuario';
 	return {
-		id: claims.sub,
-		role: claims.role,
+		id: claims.sub ?? '',
+		role: claims.role ?? null,
 		displayName: toTitleCase(rawName),
 		email: '',
 		photoURL: claims.foto ? `${FOTO_BASE_URL}${claims.foto}` : '',
 		shortcuts: [],
 		settings: {},
-		loginRedirectUrl: '/example'
+		loginRedirectUrl: '/almacenes'
 	};
 }
 

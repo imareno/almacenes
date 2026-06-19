@@ -48,8 +48,9 @@ class FuseAuthorization extends Component<FuseAuthorizationProps, State> {
 
 	shouldComponentUpdate(nextProps: FuseAuthorizationProps, nextState: State) {
 		const { accessGranted } = this.state;
+		const locationChanged = nextProps.location.pathname !== this.props.location.pathname;
 
-		return nextState.accessGranted !== accessGranted;
+		return nextState.accessGranted !== accessGranted || locationChanged;
 	}
 
 	componentDidUpdate() {

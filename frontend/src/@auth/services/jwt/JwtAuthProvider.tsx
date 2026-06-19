@@ -8,6 +8,9 @@ import { isTokenValid } from './utils/jwtUtils';
 import JwtAuthContext from '@auth/services/jwt/JwtAuthContext';
 import { JwtAuthContextType } from '@auth/services/jwt/JwtAuthContext';
 import { HTTPError } from 'ky';
+import settingsConfig from '@/configs/settingsConfig';
+
+const VALID_ROLES = settingsConfig.defaultAuth ?? [];
 
 export type JwtSignInPayload = {
 	username: string;
@@ -56,32 +59,43 @@ function JwtAuthProvider(props: FuseAuthProviderComponentProps) {
 			const accessToken = tokenStorageValue;
 
 			if (isTokenValid(accessToken)) {
-				// Token válido — restaurar sesión desde claims locales sin llamar al backend
+				const user = mapUserFromToken(accessToken);
+				const role = user.role as string | null;
+				// Rechazar tokens con rol inválido (ej: tokens viejos con role="user")
+				if (!role || (VALID_ROLES.length > 0 && !VALID_ROLES.includes(role))) {
+					return false;
+				}
 				setGlobalHeaders({ Authorization: `Bearer ${accessToken}` });
-				return mapUserFromToken(accessToken);
+				return user;
 			}
 
 			return false;
 		};
 
 		if (!authState.isAuthenticated) {
-			attemptAutoLogin().then((userData) => {
-				if (userData) {
-					setAuthState({
-						authStatus: 'authenticated',
-						isAuthenticated: true,
-						user: userData
-					});
-				} else {
-					removeTokenStorageValue();
-					removeGlobalHeaders(['Authorization']);
-					setAuthState({
-						authStatus: 'unauthenticated',
-						isAuthenticated: false,
-						user: null
-					});
-				}
-			});
+			const fallbackToGuest = () => {
+				removeTokenStorageValue();
+				removeGlobalHeaders(['Authorization']);
+				setAuthState({
+					authStatus: 'unauthenticated',
+					isAuthenticated: false,
+					user: null
+				});
+			};
+
+			attemptAutoLogin()
+				.then((userData) => {
+					if (userData) {
+						setAuthState({
+							authStatus: 'authenticated',
+							isAuthenticated: true,
+							user: userData
+						});
+					} else {
+						fallbackToGuest();
+					}
+				})
+				.catch(fallbackToGuest);
 		}
 		// eslint-disable-next-line
 	}, [authState.isAuthenticated]);

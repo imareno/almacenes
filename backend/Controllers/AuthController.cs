@@ -85,17 +85,17 @@ public class AuthController : ControllerBase
         if (usuarioExt is null || usuarioExt.Id <= 0)
             return StatusCode(502, new { error = "Respuesta inválida del servicio de usuarios" });
 
-        // 3. Determinar rol (opcional — si la BD no está disponible, rol por defecto "user")
-        var role = "user";
+        // 3. Determinar rol: almacenero si está en almacen_encargado, solicitante si no
+        var role = "solicitante";
         try
         {
             using var conn = _db.CreateConnection();
             var esEncargado = await conn.ExecuteScalarAsync<bool>(
                 "SELECT EXISTS(SELECT 1 FROM almacen_encargado WHERE user_id = @uid AND active = true)",
                 new { uid = usuarioExt.Id });
-            role = esEncargado ? "almacenero" : "user";
+            if (esEncargado) role = "almacenero";
         }
-        catch { /* BD no disponible — rol por defecto "user" */ }
+        catch { /* BD no disponible — rol por defecto "solicitante" */ }
 
         // 4. Generar JWT con nombre y foto en los claims
         var token = _jwt.GenerateToken(
@@ -172,12 +172,11 @@ public class AuthController : ControllerBase
 
         using var conn = _db.CreateConnection();
 
-        // Re-verificar rol por si cambió la asignación de encargado
+        // Re-verificar rol por si cambió la asignación
         var esEncargado = await conn.ExecuteScalarAsync<bool>(
             "SELECT EXISTS(SELECT 1 FROM almacen_encargado WHERE user_id = @uid AND active = true)",
             new { uid = userId });
-
-        var role  = esEncargado ? "almacenero" : "user";
+        var role = esEncargado ? "almacenero" : "solicitante";
         var token = _jwt.GenerateToken(userId, username, role);
 
         return Ok(new

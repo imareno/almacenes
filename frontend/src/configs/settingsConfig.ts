@@ -34,9 +34,24 @@ const settingsConfig: FuseSettingsConfigType = {
 >>>>>>> 33ba602eb6c38e056e198fe65530d87bb7d51c8f
 	},
 
+<<<<<<< HEAD
 	defaultAuth: ['admin', 'staff', 'user'],
 
 	loginRedirectUrl: '/example'
+=======
+	/**
+	 * The defaultAuth property defines the default authorization roles for the application.
+	 * To make the whole app auth protected by default set defaultAuth:['admin','staff','user']
+	 * To make the whole app accessible without authorization by default set defaultAuth: null
+	 * The individual route configs which have auth option won't be overridden.
+	 */
+	defaultAuth: ['admin', 'almacenero', 'solicitante', 'aprobador', 'readonly'],
+
+	/**
+	 * The loginRedirectUrl property defines the default redirect URL for the logged-in user.
+	 */
+	loginRedirectUrl: '/almacenes'
+>>>>>>> e780b93 (Avance Almacenes)
 };
 
 export default settingsConfig;

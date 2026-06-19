@@ -11,7 +11,8 @@ const route: FuseRouteItemType = {
 	children: [
 		{
 			path: '401',
-			element: <Error401PageView />
+			element: <Error401PageView />,
+			auth: null
 		},
 		{
 			path: '404',
