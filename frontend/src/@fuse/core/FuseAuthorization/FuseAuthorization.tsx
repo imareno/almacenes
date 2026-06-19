@@ -84,7 +84,7 @@ class FuseAuthorization extends Component<FuseAuthorizationProps, State> {
 		 */
 		if (!userHasPermission && !isGuest && !ignoredPaths.includes(pathname)) {
 			if (isOnlyGuestAllowed) {
-				setSessionRedirectUrl('/');
+				resetSessionRedirectUrl();
 			} else {
 				setSessionRedirectUrl('401');
 			}
@@ -96,23 +96,13 @@ class FuseAuthorization extends Component<FuseAuthorizationProps, State> {
 	}
 
 	redirectRoute() {
-		const { userRole, navigate, loginRedirectUrl = '/' } = this.props;
-		const redirectUrl = getSessionRedirectUrl() || loginRedirectUrl;
+		const { userRole, navigate, loginRedirectUrl = '/dashboard' } = this.props;
 
-		/*
-		User is guest
-		Redirect to Login Page
-		*/
 		if (isUserGuest(userRole)) {
 			setTimeout(() => navigate('/login'), 0);
 		} else {
-			/*
-		  User is member
-		  User must be on unAuthorized page or just logged in
-		  Redirect to dashboard or loginRedirectUrl
-			*/
-			setTimeout(() => navigate(redirectUrl), 0);
 			resetSessionRedirectUrl();
+			setTimeout(() => navigate(loginRedirectUrl), 0);
 		}
 	}
 

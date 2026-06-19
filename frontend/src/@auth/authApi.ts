@@ -37,7 +37,7 @@ export function mapUserFromToken(token: string): User {
 		photoURL: claims.foto ? `${FOTO_BASE_URL}${claims.foto}` : '',
 		shortcuts: [],
 		settings: {},
-		loginRedirectUrl: '/almacenes'
+		loginRedirectUrl: '/dashboard'
 	};
 }
 
