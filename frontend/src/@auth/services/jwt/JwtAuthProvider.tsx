@@ -9,6 +9,7 @@ import JwtAuthContext from '@auth/services/jwt/JwtAuthContext';
 import { JwtAuthContextType } from '@auth/services/jwt/JwtAuthContext';
 import { HTTPError } from 'ky';
 import settingsConfig from '@/configs/settingsConfig';
+import { resetSessionRedirectUrl } from '@fuse/core/FuseAuthorization/sessionRedirectUrl';
 
 const VALID_ROLES = settingsConfig.defaultAuth ?? [];
 
@@ -158,6 +159,7 @@ function JwtAuthProvider(props: FuseAuthProviderComponentProps) {
 	const signOut: JwtAuthContextType['signOut'] = useCallback(() => {
 		removeTokenStorageValue();
 		removeGlobalHeaders(['Authorization']);
+		resetSessionRedirectUrl();
 		setAuthState({
 			authStatus: 'unauthenticated',
 			isAuthenticated: false,

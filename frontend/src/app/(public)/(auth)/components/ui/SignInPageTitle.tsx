@@ -1,25 +1,20 @@
 import Typography from '@mui/material/Typography';
-import Link from '@fuse/core/Link';
 
 function SignInPageTitle() {
 	return (
-		<div className="w-full">
+		<div className="flex w-full flex-col items-center text-center">
 			<img
-				className="w-12"
+				className="w-16"
 				src="/assets/images/logo/logo.svg"
 				alt="logo"
 			/>
 
-			<Typography className="mt-8 text-4xl leading-[1.25] font-extrabold tracking-tight">
+			<Typography className="mt-4 text-3xl leading-tight font-bold tracking-tight">
 				Autenticación
 			</Typography>
-			<div className="mt-0.5 flex items-baseline font-medium">
-				<Typography>Ingresa tu usuario y password</Typography>
-				<Link
-					className="ml-1"
-					to="/sign-up"
-				></Link>
-			</div>
+			<Typography color="text.secondary" className="mt-1">
+				Ingresa tu usuario y contraseña
+			</Typography>
 		</div>
 	);
 }
