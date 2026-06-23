@@ -85,15 +85,17 @@ public class AuthController : ControllerBase
         if (usuarioExt is null || usuarioExt.Id <= 0)
             return StatusCode(502, new { error = "Respuesta inválida del servicio de usuarios" });
 
-        // 3. Determinar rol: almacenero si está en almacen_encargado, solicitante si no
+        // 3. Determinar rol: admin si está en almacen_encargado con admin=true,
+        //    almacenero si está sin admin, solicitante si no está
         var role = "solicitante";
         try
         {
             using var conn = _db.CreateConnection();
-            var esEncargado = await conn.ExecuteScalarAsync<bool>(
-                "SELECT EXISTS(SELECT 1 FROM almacen_encargado WHERE user_id = @uid AND active = true)",
+            var esAdmin = await conn.ExecuteScalarAsync<bool?>(
+                "SELECT admin FROM almacen_encargado WHERE user_id = @uid AND active = true LIMIT 1",
                 new { uid = usuarioExt.Id });
-            if (esEncargado) role = "almacenero";
+            if (esAdmin.HasValue)
+                role = esAdmin.Value ? "admin" : "almacenero";
         }
         catch { /* BD no disponible — rol por defecto "solicitante" */ }
 
@@ -173,10 +175,10 @@ public class AuthController : ControllerBase
         using var conn = _db.CreateConnection();
 
         // Re-verificar rol por si cambió la asignación
-        var esEncargado = await conn.ExecuteScalarAsync<bool>(
-            "SELECT EXISTS(SELECT 1 FROM almacen_encargado WHERE user_id = @uid AND active = true)",
+        var esAdmin = await conn.ExecuteScalarAsync<bool?>(
+            "SELECT admin FROM almacen_encargado WHERE user_id = @uid AND active = true LIMIT 1",
             new { uid = userId });
-        var role = esEncargado ? "almacenero" : "solicitante";
+        var role = esAdmin.HasValue ? (esAdmin.Value ? "admin" : "almacenero") : "solicitante";
         var token = _jwt.GenerateToken(userId, username, role);
 
         return Ok(new

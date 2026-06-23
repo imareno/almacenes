@@ -20,7 +20,8 @@
       "PowerShell(Start-Sleep -Seconds 8; try { $r = Invoke-WebRequest -Uri \"http://localhost:5173\" -UseBasicParsing -TimeoutSec 5; \"Frontend OK - Status: $\\($r.StatusCode\\)\" } catch { \"Frontend error: $_\" })",
       "PowerShell(Start-Sleep -Seconds 10; try { $r = Invoke-WebRequest -Uri \"http://localhost:5252/swagger\" -UseBasicParsing -TimeoutSec 8; \"Backend OK - Status: $\\($r.StatusCode\\)\" } catch { try { $r2 = Invoke-WebRequest -Uri \"http://localhost:5252/api/auth/login\" -Method POST -UseBasicParsing -TimeoutSec 8; \"Backend OK \\(api\\) - Status: $\\($r2.StatusCode\\)\" } catch { \"Backend error: $_\" } })",
       "PowerShell(Get-Process *)",
-      "PowerShell(netstat *)"
+      "PowerShell(netstat *)",
+      "Bash(npx tsc *)"
     ]
   }
 }

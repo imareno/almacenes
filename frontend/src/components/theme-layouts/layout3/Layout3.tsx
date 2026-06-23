@@ -1,14 +1,11 @@
 import { styled } from '@mui/material/styles';
 import clsx from 'clsx';
 import { memo, ReactNode } from 'react';
-import Configurator from 'src/components/theme-layouts/components/configurator/Configurator';
 import useFuseLayoutSettings from '@fuse/core/FuseLayout/useFuseLayoutSettings';
 import FuseSuspense from '@fuse/core/FuseSuspense';
 import { Outlet } from 'react-router';
 import FooterLayout3 from './components/FooterLayout3';
-import LeftSideLayout3 from './components/LeftSideLayout3';
 import NavbarWrapperLayout3 from './components/NavbarWrapperLayout3';
-import RightSideLayout3 from './components/RightSideLayout3';
 import ToolbarLayout3 from './components/ToolbarLayout3';
 import { Layout3ConfigDefaultsType } from './Layout3Config';
 
@@ -41,9 +38,6 @@ type Layout3Props = {
 	children?: ReactNode;
 };
 
-/**
- * The layout 3.
- */
 function Layout3(props: Layout3Props) {
 	const { children } = props;
 
@@ -56,8 +50,6 @@ function Layout3(props: Layout3Props) {
 			className="flex w-full flex-auto"
 			config={config}
 		>
-			{config.leftSidePanel.display && <LeftSideLayout3 />}
-
 			<div className="flex min-w-0 flex-auto flex-col">
 				<main
 					id="fuse-main"
@@ -78,10 +70,6 @@ function Layout3(props: Layout3Props) {
 						/>
 					)}
 
-					<div className="sticky top-0 z-99">
-						<Configurator />
-					</div>
-
 					<div className="relative z-10 flex min-h-0 flex-auto flex-col">
 						<FuseSuspense>
 							<Outlet />
@@ -94,8 +82,6 @@ function Layout3(props: Layout3Props) {
 					)}
 				</main>
 			</div>
-
-			{config.rightSidePanel.display && <RightSideLayout3 />}
 		</Root>
 	);
 }

@@ -11,12 +11,6 @@ export const layoutConfigOnlyMain: DeepPartial<FuseSettingsConfigType>['layout']
 		},
 		footer: {
 			display: false
-		},
-		leftSidePanel: {
-			display: false
-		},
-		rightSidePanel: {
-			display: false
 		}
 	}
 };

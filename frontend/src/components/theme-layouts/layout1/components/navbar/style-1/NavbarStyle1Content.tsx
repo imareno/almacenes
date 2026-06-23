@@ -45,7 +45,7 @@ function NavbarStyle1Content(props: NavbarStyle1ContentProps) {
 
 	return (
 		<Root className={clsx('flex h-full flex-auto flex-col overflow-hidden', className)}>
-			<div className="flex h-12 shrink-0 flex-row items-center px-5 md:h-16">
+			<div className="flex shrink-0 flex-row items-center px-5 py-3 md:py-4">
 				<Logo />
 			</div>
 

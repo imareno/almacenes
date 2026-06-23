@@ -26,7 +26,8 @@
 /backend
   Program.cs                → setup, DI, rutas, middleware, JWT, CORS
   Db.cs                     → conexión Dapper centralizada
-  Models.cs                 → todos los POCOs en un solo archivo
+  Models/
+    Models.cs               → todos los POCOs en un solo archivo
   Controllers/
     AuthController.cs
     AlmacenController.cs
@@ -38,30 +39,49 @@
   Helpers/
     PepsHelper.cs            → lógica PEPS/FIFO con bloqueo FOR UPDATE
     JwtHelper.cs             → generación y validación JWT
+    DapperDateOnlyHandler.cs → TypeHandler para mapear DateOnly ↔ PostgreSQL DATE
   Scripts/
     01_schema.sql            → creación de tablas principales
     02_seed.sql              → datos iniciales (almacenes, materiales, usuarios de prueba)
     03_sesiones.sql          → tabla sesiones (registro de logins)
     04_almacen_encargado.sql → tabla almacen_encargado (determina rol almacenero)
     05_datos_usuario.sql     → columnas JSONB adicionales (datos_usuario, datos_solicitante)
+    06_almacen_encargado_rol.sql → columna rol en almacen_encargado (ya no se usa, reemplazada por admin)
+    07_sub_almacenes.sql         → tabla sub_almacenes (detalle de almacenes)
+    08_almacen_encargado_admin.sql → columna admin en almacen_encargado
 
 /frontend                    → Fuse React Template (TypeScript)
+  vite.config.mts            → proxy /api → localhost:5252, port 3000
   src/
     @auth/
       authApi.ts             → login/refresh/mapeo de claims → User
+      authRoles.ts           → roles (aún tiene template roles, no se usa en producción)
       services/jwt/
-        JwtAuthProvider.tsx  → provider de sesión
+        JwtAuthProvider.tsx  → provider de sesión, auto-login, role validation
         JwtAuthContext.tsx
+    api/
+      almacenes.ts           → CRUD almacenes + sub-almacenes + asignados
+      compras.ts             → CRUD compras + compra_items
+      materiales.ts          → getMateriales (para selects)
     app/
-      (public)/(auth)/       → página de login (Fuse)
-      (control-panel)/       → páginas autenticadas
+      (public)/(auth)/       → login, sign-up (disabled), sign-out
+      (control-panel)/
+        almacenes/           → ✅ CRUD maestro-detalle split view (30/70)
+        compras/             → ✅ CRUD con paginación servidor, filtros, flujo estados
+        dashboard/           → placeholder (solo título)
+        example/             → demo del template (no borrar por ahora)
     configs/
-      settingsConfig.ts      → layout, tema, roles, redirect
-      navigationConfig.ts    → ítems del sidebar
-      routesConfig.tsx       → rutas principales
-      themesConfig.ts        → paletas de colores
+      settingsConfig.ts      → layout1 fullwidth, footer off, tema legacy/defaultDark, roles, redirect /dashboard
+      navigationConfig.ts    → ítems del sidebar (todos los módulos)
+      routesConfig.tsx       → auto-glob de route.tsx, redirect / → /dashboard
+      themesConfig.ts        → paletas legacy + defaultDark personalizadas
+    components/
+      PageTitle.tsx           → header reutilizable con back link
+      PageBreadcrumb.tsx      → breadcrumbs
+      ErrorNotification.tsx   → notificación roja notistack
+      data-table/             → wrapper MaterialReactTable
     utils/
-      api.ts                 → instancia ky con base URL y headers globales
+      api.ts                 → instancia ky con prefixUrl /api + global headers
 ```
 
 ## Base de datos PostgreSQL
@@ -71,20 +91,29 @@
 users           → id, username, password_hash, role, active, created_at
   roles: 'admin' | 'almacenero' | 'solicitante' | 'aprobador' | 'readonly'
 
--- Almacenes (árbol con parent_id)
-almacenes       → id, nombre, descripcion, parent_id (null = raíz), active
+-- Almacenes (maestro)
+almacenes       → id, nombre, descripcion, active
+
+-- Sub-almacenes (detalle de almacenes)
+sub_almacenes   → id, almacen_id (FK almacenes), nombre, sigla (UNIQUE por almacén),
+                   descripcion, secuencia_ingresos, secuencia_solicitudes, active
+  secuencia_ingresos/secuencia_solicitudes: contadores internos (no visibles en UI)
 
 -- Materiales
 materiales      → id, codigo, nombre, descripcion, unidad_medida,
                    categoria, active, created_at
 
--- Compras (cabecera)
-compras         → id, numero, proveedor, fecha, estado, user_id, created_at
-  estados: 'borrador' | 'confirmada' | 'recibida'
+-- Compras (cabecera) — numero se genera al concluir con secuencia_ingresos
+compras         → id, numero (UNIQUE, nullable hasta concluir), proveedor, detalle,
+                   fecha (DATE), estado, sub_almacen_id (FK sub_almacenes),
+                   user_id, active, created_at
+  estados: 'pendiente' | 'concluido' | 'generado'
+  numero formato: SIGLA-YYYY-000001 (generado al concluir)
 
 -- Detalle de compras
-compra_items    → id, compra_id, material_id, cantidad,
-                   precio_unitario, created_at
+compra_items    → id, compra_id (FK compras CASCADE), material_id (FK materiales),
+                   cantidad NUMERIC(14,4), precio_unitario NUMERIC(14,4),
+                   unidad_medida VARCHAR(30), created_at
 
 -- Movimientos — fuente de verdad de existencias
 movimientos     → id, tipo, material_id, almacen_id, cantidad,
@@ -93,10 +122,10 @@ movimientos     → id, tipo, material_id, almacen_id, cantidad,
   tipo: 'ingreso' | 'salida'
 
 -- Solicitudes
-solicitudes     → id, numero, solicitante_id, almacen_id, estado,
+solicitudes     → id, numero, solicitante_id, sub_almacen_id (FK sub_almacenes), estado,
                    aprobador_id, almacenero_id, fecha_solicitud,
                    fecha_aprobacion, fecha_despacho, fecha_entrega,
-                   observacion, datos_solicitante (JSONB), created_at
+                   observacion, active, created_at
   estados: 'pendiente' | 'aprobada' | 'rechazada' | 'despachada' | 'entregado'
 
 -- Detalle de solicitudes
@@ -114,9 +143,10 @@ sesiones        → id, user_id, username, ip_address, user_agent,
                    estado, datos_usuario (JSONB), created_at
   estado: 'activa' | 'expirada' | 'cerrada'
 
--- Relación almacén ↔ encargado (determina si user_id tiene rol almacenero)
-almacen_encargado → almacen_id, user_id, active, created_at
+-- Relación almacén ↔ encargado (determina rol del usuario)
+almacen_encargado → almacen_id, user_id, admin, active, created_at
   (user_id es ID del servicio externo — sin FK local)
+  admin=true → rol 'admin' | admin=false → rol 'almacenero' | no en tabla → rol 'solicitante'
 ```
 
 ## Auth — integración con servicio externo
@@ -125,14 +155,14 @@ El login NO usa la tabla `users` local. El flujo es:
 
 1. POST /api/auth/login → reenvía credenciales a `hades.oopp.gob.bo/seguridad/api/get_token/`
 2. Con el token externo, obtiene datos del usuario de `hades.oopp.gob.bo/seguridad/api/get_usuario/`
-3. Verifica si el `user_id` externo existe en `almacen_encargado` → rol `almacenero` o `user`
+3. Verifica `almacen_encargado`: admin=true → `admin`, existe → `almacenero`, no existe → `solicitante`
 4. Genera JWT propio con claims: `sub` (user_id), `unique_name` (username), `role`, `nombre`, `foto`
 5. Registra la sesión en tabla `sesiones`
 
 El frontend decodifica el JWT con `jwtDecode` para construir el objeto `User` sin llamar al backend.
 JWT se guarda en `localStorage` bajo la key `jwt_access_token`.
 
-**Nota:** Los JOINs a la tabla `users` en los controllers (compras, movimientos, solicitudes) asumen que el `user_id` externo coincide con un registro local. Esto puede necesitar revisión.
+**Nota importante:** `MapInboundClaims = false` en Program.cs para que ASP.NET no renombre el claim `role`.
 
 ## Flujo completo de solicitudes
 
@@ -209,11 +239,18 @@ GROUP BY material_id, almacen_id
 - POST /api/auth/logout   → marca sesión como cerrada
 
 ### Almacenes
-- GET    /api/almacenes           → lista plana (soloActivos=true por defecto)
+- GET    /api/almacenes                                → lista (soloActivos=true por defecto)
 - GET    /api/almacenes/{id}
-- POST   /api/almacenes           → solo admin
-- PUT    /api/almacenes/{id}      → solo admin (valida ciclos en árbol)
-- DELETE /api/almacenes/{id}      → baja lógica, solo admin
+- GET    /api/almacenes/asignados                      → almacenes+sub-almacenes del usuario (admin=todos, almacenero=asignados)
+- POST   /api/almacenes                                → solo admin
+- PUT    /api/almacenes/{id}                            → solo admin
+- DELETE /api/almacenes/{id}                            → baja lógica, valida que no tenga sub-almacenes activos
+
+### Sub-Almacenes
+- GET    /api/almacenes/{almacenId}/sub-almacenes       → lista por almacén (soloActivos=true)
+- POST   /api/almacenes/{almacenId}/sub-almacenes       → solo admin
+- PUT    /api/almacenes/{almacenId}/sub-almacenes/{id}  → solo admin
+- DELETE /api/almacenes/{almacenId}/sub-almacenes/{id}  → baja lógica, valida compras+solicitudes
 
 ### Materiales
 - GET    /api/materiales                     → con filtros buscar/categoria/paginación
@@ -223,11 +260,17 @@ GROUP BY material_id, almacen_id
 - PUT    /api/materiales/{id}                → admin o almacenero
 
 ### Compras
-- GET    /api/compras                        → con filtro estado/paginación
-- GET    /api/compras/{id}                   → cabecera + items
-- POST   /api/compras                        → crea en estado 'borrador'
-- PUT    /api/compras/{id}/confirmar         → borrador → confirmada
-- POST   /api/compras/{id}/recibir           → confirmada → recibida + ingresos + lotes PEPS
+- GET    /api/compras                        → filtros subAlmacenId/estado + paginación servidor
+- GET    /api/compras/{id}                   → cabecera + items + datos almacén/sub-almacén
+- POST   /api/compras                        → crea sin numero (proveedor, detalle, fecha, subAlmacenId)
+- PUT    /api/compras/{id}                   → editar cabecera (solo pendiente)
+- PUT    /api/compras/{id}/concluir          → pendiente → concluido + genera numero con secuencia_ingresos
+- DELETE /api/compras/{id}                   → baja lógica (solo pendiente)
+
+### Compra Items
+- POST   /api/compras/{id}/items             → agregar ítem (solo pendiente)
+- PUT    /api/compras/{id}/items/{itemId}    → editar ítem (solo pendiente)
+- DELETE /api/compras/{id}/items/{itemId}    → eliminar ítem (solo pendiente)
 
 ### Movimientos
 - GET    /api/movimientos                    → con filtros material/almacen/tipo/fechas
@@ -257,14 +300,24 @@ GROUP BY material_id, almacen_id
 - Template Fuse instalado con routing y layout base
 - Auth integrada: JwtAuthProvider adaptado, authApi.ts conectado a /api/auth/login
 - JWT guardado en localStorage (`jwt_access_token`), headers globales con `ky`
-- Navegación lateral configurada con todos los módulos
-- Tema: defaultDark
-- Ninguna página del sistema construida aún (solo /example del template)
+- Navegación lateral configurada con todos los módulos (iconos Lucide)
+- Logo personalizado: "ALMACENES / MOPSV" con logo.svg
+- Toolbar limpio: sin LightDarkModeToggle ni MainProjectSelection (eliminados)
+- Tema: `legacy` (main/toolbar/footer) + `defaultDark` (navbar)
+- Vite proxy: `/api` → `http://localhost:5252` (backend .NET)
+- Componentes compartidos: PageTitle, PageBreadcrumb, ErrorNotification, DataTable
+- **Patrón establecido**: página única .tsx, API en `api/`, React Query + notistack
+- Configurator de layout y side panels eliminados del template
+- Layout: fullwidth, footer off, sin configurator
+- `display: 'flex'` en todas las columnas del DataGrid para alineación vertical consistente
 
-### Páginas a construir
-- /almacenes              → árbol de almacenes (TreeView MUI o tabla anidada)
+### Páginas construidas
+- /almacenes              → ✅ CRUD maestro-detalle split view 30/70 (almacenes + sub-almacenes)
+- /compras                → ✅ Split view 40/60: lista compras + detalle items. Filtro por sub-almacén (agrupado por almacén). CRUD cabecera + CRUD items. Número auto-generado al concluir. Autocomplete materiales.
+- /dashboard              → placeholder (solo título, sin KPIs)
+
+### Páginas por construir
 - /materiales             → tabla + formulario ABM
-- /compras                → tabla + nueva compra + flujo recepción
 - /movimientos            → tabla con filtros avanzados
 - /solicitudes            → vista según rol:
     solicitante           → mis solicitudes + nueva solicitud
@@ -275,42 +328,53 @@ GROUP BY material_id, almacen_id
 - /reportes/valorizado    → tabla existencias valorizadas PEPS
 - /reportes/compras       → tabla/gráfico resumen compras
 - /reportes/movimientos   → tabla/gráfico entradas/salidas
-- /dashboard              → KPIs: solicitudes pendientes, existencias bajas, últimos movimientos
+- /dashboard              → completar con KPIs: solicitudes pendientes, existencias bajas, últimos movimientos
 
-### Estructura de archivos a crear en frontend/src/
+### Estructura de archivos
 
 ```
 app/(control-panel)/
-  almacenes/route.tsx + components/
-  materiales/route.tsx + components/
-  compras/route.tsx + components/
-  movimientos/route.tsx + components/
-  solicitudes/route.tsx + components/
+  almacenes/                  → ✅ route.tsx + AlmacenesPage.tsx (split view)
+  compras/                    → ✅ route.tsx + ComprasPage.tsx
+  dashboard/                  → route.tsx + DashboardPage.tsx (placeholder)
+  materiales/                 → POR CREAR
+  movimientos/                → POR CREAR
+  solicitudes/                → POR CREAR
   reportes/
-    existencias/route.tsx
-    kardex/route.tsx
-    valorizado/route.tsx
-    compras/route.tsx
-    movimientos/route.tsx
-  dashboard/route.tsx + components/
+    existencias/              → POR CREAR
+    kardex/                   → POR CREAR
+    valorizado/               → POR CREAR
+    compras/                  → POR CREAR
+    movimientos/              → POR CREAR
 
 api/                          → un archivo por módulo (TypeScript)
-  almacenes.ts
-  materiales.ts
-  compras.ts
-  movimientos.ts
-  solicitudes.ts
-  reportes.ts
-
-components/                   → solo si se reutiliza 2+ veces
-  RolGuard.tsx                → proteger rutas por rol
+  almacenes.ts                → ✅ CRUD almacenes + sub-almacenes + asignados
+  compras.ts                  → ✅ CRUD compras + compra_items
+  materiales.ts               → ✅ getMateriales (para selects en compra_items)
+  movimientos.ts              → POR CREAR
+  solicitudes.ts              → POR CREAR
+  reportes.ts                 → POR CREAR
 ```
+
+### Patrón para nuevas páginas (seguir el de Almacenes)
+1. Crear `api/<modulo>.ts` con tipos + funciones ky
+2. Crear `app/(control-panel)/<modulo>/route.tsx` con lazy import
+3. Crear `app/(control-panel)/<modulo>/<Modulo>Page.tsx` con:
+   - React Query para datos (`useQuery`, `useMutation`)
+   - DataGrid de MUI X para tabla
+   - Diálogos MUI para crear/editar
+   - notistack para feedback
+   - FusePageSimple como layout
+   - Invalidación de cache con `queryClient.invalidateQueries`
 
 ### Convenciones frontend
 - Rutas siguen la convención Fuse: `app/(control-panel)/<nombre>/route.tsx`
-- Componentes de página en `components/` dentro de cada ruta
+- Página principal como archivo único `<Modulo>Page.tsx` (no subdirectorio components/ salvo que crezca mucho)
 - Los archivos `api/*.ts` solo hacen llamadas HTTP con `ky` y tipan la respuesta
 - No duplicar validaciones del backend en el frontend
+- Manejo de errores ky: `err.response?.json()` → mostrar `body.error` (ky lanza HTTPError con .response)
+- Vite proxy: `/api` → `http://localhost:5252` (no usar VITE_API_BASE_URL, el proxy ya resuelve)
+- Rutas se auto-registran por glob en routesConfig.tsx (no necesitan import manual)
 
 ## Convenciones generales
 
@@ -343,36 +407,50 @@ components/                   → solo si se reutiliza 2+ veces
 ## Estado de módulos
 
 ### Fase 1 — Backend ✅ COMPLETO
-- ✅ Scripts SQL (01_schema.sql al 05_datos_usuario.sql)
-- ✅ Program.cs + Db.cs + JwtHelper
-- ✅ AuthController (login externo + refresh + logout + sesiones)
-- ✅ AlmacenController
+- ✅ Scripts SQL (01_schema.sql al 08_almacen_encargado_admin.sql)
+- ✅ Program.cs + Db.cs + JwtHelper + DapperDateOnlyHandler (MapInboundClaims=false, MatchNamesWithUnderscores=true)
+- ✅ AuthController (login externo + refresh + logout + sesiones + lógica admin/almacenero/solicitante)
+- ✅ AlmacenController (CRUD almacenes + sub-almacenes con validaciones de eliminación)
 - ✅ MaterialController
-- ✅ CompraController
+- ✅ CompraController (CRUD + flujo pendiente→concluido→generado, depende de sub_almacen_id)
 - ✅ MovimientoController + PepsHelper
-- ✅ SolicitudController (flujo completo 5 acciones)
+- ✅ SolicitudController (flujo completo 5 acciones, depende de sub_almacen_id)
 - ✅ ReporteController
 
 ### Fase 2 — Frontend 🔄 EN CURSO
 - ✅ Setup Fuse template (React + MUI + TypeScript)
 - ✅ Auth integrada → JWT propio (JwtAuthProvider + authApi.ts)
 - ✅ Navegación lateral completa (todos los módulos y reportes)
-- [ ] Almacenes
-- [ ] Materiales
-- [ ] Compras
-- [ ] Movimientos
-- [ ] Solicitudes (vistas por rol)
-- [ ] Reportes (5 reportes)
-- [ ] Dashboard
+- ✅ Layout personalizado: fullwidth, footer off, sin configurator, Logo ALMACENES/MOPSV, tema legacy+dark
+- ✅ Almacenes — CRUD maestro-detalle split view 30/70 (almacenes + sub-almacenes con sigla)
+- ✅ Compras — Split view 40/60, filtro sub-almacén agrupado, CRUD cabecera+items, número auto al concluir
+- ✅ API almacenes.ts + compras.ts + materiales.ts
+- 🟡 Dashboard — placeholder (solo título, sin KPIs)
+- [ ] Materiales (página + API)
+- [ ] Movimientos (página + API)
+- [ ] Solicitudes (vistas por rol + API)
+- [ ] Reportes (5 reportes + API)
+- [ ] Dashboard KPIs
 
 ## Al iniciar cada sesión
 
-1. Leer este archivo
-2. Revisar qué módulos están marcados como completos ✅
-3. Leer el código existente para entender el estado real
-4. Preguntar por cuál módulo continuar si no es claro
-5. Mantener arquitectura plana — no agregar capas sin consultar
-6. No instalar paquetes sin aprobación previa
-7. El frontend usa Fuse (MUI) — NO usar DevExtreme
-8. Frontend usa `ky` como HTTP client (no axios)
-9. JWT se guarda como `jwt_access_token` en localStorage
+1. Leer este archivo — el estado de módulos refleja el avance real
+2. Si el usuario no indica módulo, preguntar cuál continuar
+3. Para nuevas páginas: seguir el patrón de ComprasPage.tsx o AlmacenesPage.tsx según el tipo
+4. Mantener arquitectura plana — no agregar capas sin consultar
+5. No instalar paquetes sin aprobación previa
+6. El frontend usa Fuse (MUI) — NO usar DevExtreme
+7. Frontend usa `ky` como HTTP client (no axios)
+8. JWT se guarda como `jwt_access_token` en localStorage
+9. Backend corre en localhost:5252, frontend en localhost:3000 (proxy Vite)
+10. Dapper: `MatchNamesWithUnderscores = true` en Program.cs (mapea snake_case → PascalCase)
+11. ASP.NET: `MapInboundClaims = false` para que el claim `role` funcione con [Authorize(Roles)]
+12. Errores ky en frontend: leer `err.response.json()` (HTTPError), no `err.json()` (no es Response)
+13. DataGrid: usar `display: 'flex'` en todas las columnas para alineación vertical consistente
+14. Compras y solicitudes dependen de sub_almacen_id — formularios usan selección cascada almacén→sub-almacén
+15. Validaciones de eliminación: almacén valida sub-almacenes, sub-almacén valida compras+solicitudes
+16. Dapper no soporta DateOnly nativo — usar DapperDateOnlyHandler (registrado en Program.cs)
+17. Records posicionales de Dapper fallan con DateOnly — usar clases con propiedades para rows con columnas DATE
+18. Filtro sub-almacén en compras usa ListSubheader de MUI para agrupar por almacén
+19. GET /api/almacenes/asignados devuelve almacenes+sub-almacenes anidados según rol (admin=todos, almacenero=asignados)
+20. Compras: numero nullable, se genera al concluir con formato SIGLA-YYYY-NNNNNN usando secuencia_ingresos del sub-almacén

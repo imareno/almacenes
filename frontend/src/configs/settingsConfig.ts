@@ -7,8 +7,12 @@ const settingsConfig: FuseSettingsConfigType = {
 	layout: {
 		style: 'layout1',
 		config: {
+			mode: 'fullwidth',
 			navbar: {
 				style: 'style-1'
+			},
+			footer: {
+				display: false
 			}
 		}
 	},
@@ -18,15 +22,15 @@ const settingsConfig: FuseSettingsConfigType = {
 	direction: i18n.dir(i18n.options.lng) || 'ltr',
 
 	theme: {
-		main: themesConfig.defaultDark,
-		navbar: themesConfig.defaultNavbar,
-		toolbar: themesConfig.default,
-		footer: themesConfig.default
+		main: themesConfig.legacy,
+		navbar: themesConfig.defaultDark,
+		toolbar: themesConfig.legacy,
+		footer: themesConfig.legacy
 	},
 
 	defaultAuth: ['admin', 'almacenero', 'solicitante', 'aprobador', 'readonly'],
 
-	loginRedirectUrl: '/almacenes'
+	loginRedirectUrl: '/dashboard'
 };
 
 export default settingsConfig;

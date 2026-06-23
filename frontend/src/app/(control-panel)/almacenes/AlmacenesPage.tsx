@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSnackbar } from 'notistack';
 import FusePageSimple from '@fuse/core/FusePageSimple';
@@ -11,11 +11,13 @@ import {
 	DialogActions,
 	DialogContent,
 	DialogTitle,
-	FormControlLabel,
+	Divider,
 	IconButton,
-	MenuItem,
+	List,
+	ListItemButton,
+	ListItemText,
+	Paper,
 	Stack,
-	Switch,
 	TextField,
 	Tooltip,
 	Typography
@@ -24,60 +26,33 @@ import { DataGrid, GridColDef, GridToolbarQuickFilter } from '@mui/x-data-grid';
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
+import WarehouseIcon from '@mui/icons-material/Warehouse';
 import {
 	Almacen,
 	AlmacenInput,
+	SubAlmacen,
+	SubAlmacenInput,
 	getAlmacenes,
 	createAlmacen,
 	updateAlmacen,
-	deleteAlmacen
+	deleteAlmacen,
+	getSubAlmacenes,
+	createSubAlmacen,
+	updateSubAlmacen,
+	deleteSubAlmacen
 } from '../../../api/almacenes';
 
-// ─── tipos internos ──────────────────────────────────────────────────────────
-
-interface AlmacenRow extends Almacen {
-	depth: number;
-}
+// ─── tipos ───────────────────────────────────────────────────────────────────
 
 interface FormState {
 	nombre: string;
+	sigla: string;
 	descripcion: string;
-	parentId: number | '';
-	active: boolean;
 }
 
-const FORM_EMPTY: FormState = { nombre: '', descripcion: '', parentId: '', active: true };
+const FORM_EMPTY: FormState = { nombre: '', sigla: '', descripcion: '' };
 
-// ─── helpers árbol ───────────────────────────────────────────────────────────
-
-function buildTreeRows(almacenes: Almacen[]): AlmacenRow[] {
-	const byParent = new Map<number | null, Almacen[]>();
-
-	for (const a of almacenes) {
-		const key = a.parentId ?? null;
-		if (!byParent.has(key)) byParent.set(key, []);
-		byParent.get(key)!.push(a);
-	}
-
-	const rows: AlmacenRow[] = [];
-
-	function traverse(parentId: number | null, depth: number) {
-		const children = (byParent.get(parentId) ?? []).sort((a, b) =>
-			a.nombre.localeCompare(b.nombre, 'es')
-		);
-		for (const child of children) {
-			rows.push({ ...child, depth });
-			traverse(child.id, depth + 1);
-		}
-	}
-
-	traverse(null, 0);
-	return rows;
-}
-
-function hasDescendants(id: number, almacenes: Almacen[]): boolean {
-	return almacenes.some((a) => a.parentId === id);
-}
+type DialogTarget = 'almacen' | 'sub';
 
 // ─── layout ──────────────────────────────────────────────────────────────────
 
@@ -90,37 +65,16 @@ const Root = styled(FusePageSimple)(({ theme }) => ({
 	}
 }));
 
-// ─── componente principal ─────────────────────────────────────────────────────
+// ─── hook errores ky ─────────────────────────────────────────────────────────
 
-export default function AlmacenesPage() {
+function useApiError() {
 	const { enqueueSnackbar } = useSnackbar();
-	const queryClient = useQueryClient();
-
-	const { data: almacenes = [], isLoading } = useQuery({
-		queryKey: ['almacenes'],
-		queryFn: () => getAlmacenes(false)
-	});
-
-	const rows = useMemo(() => buildTreeRows(almacenes), [almacenes]);
-
-	// estado diálogo create/edit
-	const [dialogOpen, setDialogOpen] = useState(false);
-	const [editingId, setEditingId] = useState<number | null>(null);
-	const [form, setForm] = useState<FormState>(FORM_EMPTY);
-	const [errors, setErrors] = useState<Partial<Record<keyof FormState, string>>>({});
-
-	// estado diálogo eliminar
-	const [deleteTarget, setDeleteTarget] = useState<AlmacenRow | null>(null);
-
-	// ─── mutaciones ───────────────────────────────────────────────────────────
-
-	const invalidate = () => queryClient.invalidateQueries({ queryKey: ['almacenes'] });
-
-	const handleApiError = async (err: unknown) => {
+	return async (err: unknown) => {
 		let msg = 'Ocurrió un error inesperado';
-		if (err instanceof Response) {
+		const response = (err as { response?: Response })?.response;
+		if (response) {
 			try {
-				const body = await err.json();
+				const body = await response.json();
 				msg = body?.error ?? msg;
 			} catch { /* ignorar */ }
 		} else if (err instanceof Error) {
@@ -128,54 +82,130 @@ export default function AlmacenesPage() {
 		}
 		enqueueSnackbar(msg, { variant: 'error' });
 	};
+}
 
-	const createMutation = useMutation({
+// ─── componente principal ────────────────────────────────────────────────────
+
+export default function AlmacenesPage() {
+	const { enqueueSnackbar } = useSnackbar();
+	const queryClient = useQueryClient();
+	const handleApiError = useApiError();
+
+	const [selectedAlmacenId, setSelectedAlmacenId] = useState<number | null>(null);
+
+	// diálogo crear/editar
+	const [dialogOpen, setDialogOpen] = useState(false);
+	const [dialogTarget, setDialogTarget] = useState<DialogTarget>('almacen');
+	const [editingId, setEditingId] = useState<number | null>(null);
+	const [form, setForm] = useState<FormState>(FORM_EMPTY);
+	const [errors, setErrors] = useState<Partial<Record<keyof FormState, string>>>({});
+
+	// diálogo eliminar
+	const [deleteInfo, setDeleteInfo] = useState<{ target: DialogTarget; id: number; nombre: string } | null>(null);
+
+	// ─── queries ──────────────────────────────────────────────────────────────
+
+	const { data: almacenes = [], isLoading: loadingAlmacenes } = useQuery({
+		queryKey: ['almacenes'],
+		queryFn: () => getAlmacenes(false)
+	});
+
+	const { data: subAlmacenes = [], isLoading: loadingSubs } = useQuery({
+		queryKey: ['sub-almacenes', selectedAlmacenId],
+		queryFn: () => getSubAlmacenes(selectedAlmacenId!, false),
+		enabled: selectedAlmacenId !== null
+	});
+
+	const selectedAlmacen = almacenes.find((a) => a.id === selectedAlmacenId) ?? null;
+
+	// ─── mutaciones almacén ───────────────────────────────────────────────────
+
+	const createAlmacenMut = useMutation({
 		mutationFn: (data: AlmacenInput) => createAlmacen(data),
 		onSuccess: () => {
-			invalidate();
-			enqueueSnackbar('Almacén creado correctamente', { variant: 'success' });
+			queryClient.invalidateQueries({ queryKey: ['almacenes'] });
+			enqueueSnackbar('Almacén creado', { variant: 'success' });
 			setDialogOpen(false);
 		},
 		onError: handleApiError
 	});
 
-	const updateMutation = useMutation({
+	const updateAlmacenMut = useMutation({
 		mutationFn: ({ id, data }: { id: number; data: AlmacenInput }) => updateAlmacen(id, data),
 		onSuccess: () => {
-			invalidate();
-			enqueueSnackbar('Almacén actualizado correctamente', { variant: 'success' });
+			queryClient.invalidateQueries({ queryKey: ['almacenes'] });
+			enqueueSnackbar('Almacén actualizado', { variant: 'success' });
 			setDialogOpen(false);
 		},
 		onError: handleApiError
 	});
 
-	const deleteMutation = useMutation({
+	const deleteAlmacenMut = useMutation({
 		mutationFn: (id: number) => deleteAlmacen(id),
-		onSuccess: () => {
-			invalidate();
-			enqueueSnackbar('Almacén eliminado correctamente', { variant: 'success' });
-			setDeleteTarget(null);
+		onSuccess: (_, deletedId) => {
+			queryClient.invalidateQueries({ queryKey: ['almacenes'] });
+			if (selectedAlmacenId === deletedId) setSelectedAlmacenId(null);
+			enqueueSnackbar('Almacén eliminado', { variant: 'success' });
+			setDeleteInfo(null);
 		},
 		onError: handleApiError
 	});
 
-	// ─── handlers diálogo form ────────────────────────────────────────────────
+	// ─── mutaciones sub-almacén ───────────────────────────────────────────────
 
-	function openCreate() {
+	const createSubMut = useMutation({
+		mutationFn: (data: SubAlmacenInput) => createSubAlmacen(selectedAlmacenId!, data),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: ['sub-almacenes', selectedAlmacenId] });
+			enqueueSnackbar('Sub-almacén creado', { variant: 'success' });
+			setDialogOpen(false);
+		},
+		onError: handleApiError
+	});
+
+	const updateSubMut = useMutation({
+		mutationFn: ({ id, data }: { id: number; data: SubAlmacenInput }) =>
+			updateSubAlmacen(selectedAlmacenId!, id, data),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: ['sub-almacenes', selectedAlmacenId] });
+			enqueueSnackbar('Sub-almacén actualizado', { variant: 'success' });
+			setDialogOpen(false);
+		},
+		onError: handleApiError
+	});
+
+	const deleteSubMut = useMutation({
+		mutationFn: (id: number) => deleteSubAlmacen(selectedAlmacenId!, id),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: ['sub-almacenes', selectedAlmacenId] });
+			enqueueSnackbar('Sub-almacén eliminado', { variant: 'success' });
+			setDeleteInfo(null);
+		},
+		onError: handleApiError
+	});
+
+	// ─── handlers diálogo ─────────────────────────────────────────────────────
+
+	function openCreateDialog(target: DialogTarget) {
+		setDialogTarget(target);
 		setEditingId(null);
 		setForm(FORM_EMPTY);
 		setErrors({});
 		setDialogOpen(true);
 	}
 
-	function openEdit(row: AlmacenRow) {
-		setEditingId(row.id);
-		setForm({
-			nombre: row.nombre,
-			descripcion: row.descripcion ?? '',
-			parentId: row.parentId ?? '',
-			active: row.active
-		});
+	function openEditAlmacen(a: Almacen) {
+		setDialogTarget('almacen');
+		setEditingId(a.id);
+		setForm({ nombre: a.nombre, sigla: '', descripcion: a.descripcion ?? '' });
+		setErrors({});
+		setDialogOpen(true);
+	}
+
+	function openEditSub(s: SubAlmacen) {
+		setDialogTarget('sub');
+		setEditingId(s.id);
+		setForm({ nombre: s.nombre, sigla: s.sigla ?? '', descripcion: s.descripcion ?? '' });
 		setErrors({});
 		setDialogOpen(true);
 	}
@@ -185,86 +215,63 @@ export default function AlmacenesPage() {
 		if (errors[key]) setErrors((prev) => ({ ...prev, [key]: undefined }));
 	}
 
-	function validate(): boolean {
+	function handleSubmit() {
 		const next: Partial<Record<keyof FormState, string>> = {};
 		if (!form.nombre.trim()) next.nombre = 'El nombre es requerido';
-		if (editingId && form.parentId === editingId) {
-			next.parentId = 'Un almacén no puede ser su propio superior';
-		}
 		setErrors(next);
-		return Object.keys(next).length === 0;
-	}
+		if (Object.keys(next).length > 0) return;
 
-	function handleSubmit() {
-		if (!validate()) return;
-		const data: AlmacenInput = {
-			nombre: form.nombre.trim(),
-			descripcion: form.descripcion.trim() || undefined,
-			parentId: form.parentId === '' ? null : (form.parentId as number),
-			active: form.active
-		};
-		if (editingId) {
-			updateMutation.mutate({ id: editingId, data });
+		if (dialogTarget === 'almacen') {
+			const data: AlmacenInput = {
+				nombre: form.nombre.trim(),
+				descripcion: form.descripcion.trim() || undefined
+			};
+			if (editingId) updateAlmacenMut.mutate({ id: editingId, data });
+			else createAlmacenMut.mutate(data);
 		} else {
-			createMutation.mutate(data);
+			const data: SubAlmacenInput = {
+				nombre: form.nombre.trim(),
+				sigla: form.sigla.trim() || undefined,
+				descripcion: form.descripcion.trim() || undefined
+			};
+			if (editingId) updateSubMut.mutate({ id: editingId, data });
+			else createSubMut.mutate(data);
 		}
 	}
 
-	// opciones de padre: excluir el propio almacén y sus descendientes
-	const parentOptions = useMemo(() => {
-		if (!editingId) return almacenes;
-		const excluded = new Set<number>([editingId]);
-		let changed = true;
-		while (changed) {
-			changed = false;
-			for (const a of almacenes) {
-				if (!excluded.has(a.id) && a.parentId != null && excluded.has(a.parentId)) {
-					excluded.add(a.id);
-					changed = true;
-				}
-			}
-		}
-		return almacenes.filter((a) => !excluded.has(a.id));
-	}, [almacenes, editingId]);
-
-	// ─── handler eliminar ─────────────────────────────────────────────────────
-
-	function handleDeleteClick(row: AlmacenRow) {
-		if (hasDescendants(row.id, almacenes)) {
-			enqueueSnackbar('No se puede eliminar un almacén que tiene sub-almacenes', {
-				variant: 'warning'
-			});
-			return;
-		}
-		setDeleteTarget(row);
+	function confirmDelete() {
+		if (!deleteInfo) return;
+		if (deleteInfo.target === 'almacen') deleteAlmacenMut.mutate(deleteInfo.id);
+		else deleteSubMut.mutate(deleteInfo.id);
 	}
 
-	// ─── columnas ─────────────────────────────────────────────────────────────
+	// ─── columnas sub-almacenes ───────────────────────────────────────────────
 
-	const columns: GridColDef<AlmacenRow>[] = [
+	const subColumns: GridColDef<SubAlmacen>[] = [
+		{
+			field: 'sigla',
+			headerName: 'Sigla',
+			width: 100,
+			display: 'flex',
+			renderCell: ({ value }) => (
+				<Typography variant="body2" color="text.secondary">
+					{value || '—'}
+				</Typography>
+			)
+		},
 		{
 			field: 'nombre',
-			headerName: 'Almacén',
+			headerName: 'Sub-almacén',
 			flex: 1,
-			minWidth: 220,
-			renderCell: ({ row }) => (
-				<Box sx={{ pl: row.depth * 3, display: 'flex', alignItems: 'center', gap: 0.5, height: '100%' }}>
-					{row.depth > 0 && (
-						<Typography component="span" sx={{ color: 'text.disabled', fontSize: 14 }}>
-							└{'  '}
-						</Typography>
-					)}
-					<Typography variant="body2" fontWeight={row.depth === 0 ? 600 : 400}>
-						{row.nombre}
-					</Typography>
-				</Box>
-			)
+			minWidth: 180,
+			display: 'flex'
 		},
 		{
 			field: 'descripcion',
 			headerName: 'Descripción',
 			flex: 1.5,
 			minWidth: 200,
+			display: 'flex',
 			renderCell: ({ value }) => (
 				<Typography variant="body2" color="text.secondary" noWrap title={value}>
 					{value || '—'}
@@ -275,6 +282,7 @@ export default function AlmacenesPage() {
 			field: 'active',
 			headerName: 'Estado',
 			width: 110,
+			display: 'flex',
 			renderCell: ({ value }) => (
 				<Chip
 					label={value ? 'Activo' : 'Inactivo'}
@@ -290,15 +298,20 @@ export default function AlmacenesPage() {
 			width: 100,
 			sortable: false,
 			filterable: false,
+			display: 'flex',
 			renderCell: ({ row }) => (
 				<Stack direction="row">
 					<Tooltip title="Editar">
-						<IconButton size="small" onClick={() => openEdit(row)}>
+						<IconButton size="small" onClick={() => openEditSub(row)}>
 							<EditIcon fontSize="small" />
 						</IconButton>
 					</Tooltip>
 					<Tooltip title="Eliminar">
-						<IconButton size="small" color="error" onClick={() => handleDeleteClick(row)}>
+						<IconButton
+							size="small"
+							color="error"
+							onClick={() => setDeleteInfo({ target: 'sub', id: row.id, nombre: row.nombre })}
+						>
 							<DeleteIcon fontSize="small" />
 						</IconButton>
 					</Tooltip>
@@ -307,7 +320,15 @@ export default function AlmacenesPage() {
 		}
 	];
 
-	const isSaving = createMutation.isPending || updateMutation.isPending;
+	const isSaving =
+		createAlmacenMut.isPending ||
+		updateAlmacenMut.isPending ||
+		createSubMut.isPending ||
+		updateSubMut.isPending;
+
+	const isDeleting = deleteAlmacenMut.isPending || deleteSubMut.isPending;
+
+	const dialogLabel = dialogTarget === 'almacen' ? 'almacén' : 'sub-almacén';
 
 	// ─── render ───────────────────────────────────────────────────────────────
 
@@ -318,37 +339,176 @@ export default function AlmacenesPage() {
 					<Typography variant="h5" fontWeight={600}>
 						Almacenes
 					</Typography>
-					<Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
-						Nuevo almacén
-					</Button>
 				</Box>
 			}
 			content={
-				<Box sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column' }}>
-					<DataGrid
-						rows={rows}
-						columns={columns}
-						loading={isLoading}
-						disableRowSelectionOnClick
-						density="comfortable"
-						getRowId={(r) => r.id}
-						slots={{
-							toolbar: () => (
-								<Box sx={{ p: 1, pb: 0 }}>
-									<GridToolbarQuickFilter placeholder="Buscar almacén..." />
+				<Box sx={{ p: 3, height: '100%', display: 'flex', gap: 3 }}>
+					{/* ── Panel izquierdo: almacenes ── */}
+					<Paper
+						variant="outlined"
+						sx={{
+							flex: '0 0 30%',
+							minWidth: 280,
+							display: 'flex',
+							flexDirection: 'column',
+							overflow: 'hidden'
+						}}
+					>
+						<Box sx={{ p: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+							<Typography variant="subtitle1" fontWeight={600}>
+								Almacenes
+							</Typography>
+							<Tooltip title="Nuevo almacén">
+								<IconButton size="small" color="primary" onClick={() => openCreateDialog('almacen')}>
+									<AddIcon />
+								</IconButton>
+							</Tooltip>
+						</Box>
+						<Divider />
+						<List sx={{ flex: 1, overflow: 'auto', py: 0 }}>
+							{loadingAlmacenes && (
+								<Box sx={{ p: 2, textAlign: 'center' }}>
+									<Typography variant="body2" color="text.secondary">
+										Cargando...
+									</Typography>
 								</Box>
-							)
-						}}
-						initialState={{
-							pagination: { paginationModel: { pageSize: 25 } }
-						}}
-						pageSizeOptions={[10, 25, 50]}
-						sx={{ flex: 1, border: 'none' }}
-					/>
+							)}
+							{!loadingAlmacenes && almacenes.length === 0 && (
+								<Box sx={{ p: 2, textAlign: 'center' }}>
+									<Typography variant="body2" color="text.secondary">
+										Sin almacenes
+									</Typography>
+								</Box>
+							)}
+							{almacenes.map((a) => (
+								<ListItemButton
+									key={a.id}
+									selected={selectedAlmacenId === a.id}
+									onClick={() => setSelectedAlmacenId(a.id)}
+									sx={{ gap: 1 }}
+								>
+									<WarehouseIcon fontSize="small" color={a.active ? 'primary' : 'disabled'} />
+									<ListItemText
+										primary={a.nombre}
+										secondary={a.descripcion || undefined}
+										slotProps={{
+											primary: { noWrap: true },
+											secondary: { noWrap: true }
+										}}
+									/>
+									<Stack direction="row" sx={{ flexShrink: 0 }}>
+										<Tooltip title="Editar">
+											<IconButton
+												size="small"
+												onClick={(e) => {
+													e.stopPropagation();
+													openEditAlmacen(a);
+												}}
+											>
+												<EditIcon sx={{ fontSize: 16 }} />
+											</IconButton>
+										</Tooltip>
+										<Tooltip title="Eliminar">
+											<IconButton
+												size="small"
+												color="error"
+												onClick={(e) => {
+													e.stopPropagation();
+													setDeleteInfo({ target: 'almacen', id: a.id, nombre: a.nombre });
+												}}
+											>
+												<DeleteIcon sx={{ fontSize: 16 }} />
+											</IconButton>
+										</Tooltip>
+									</Stack>
+								</ListItemButton>
+							))}
+						</List>
+					</Paper>
 
-					{/* Diálogo crear / editar */}
+					{/* ── Panel derecho: sub-almacenes ── */}
+					<Paper
+						variant="outlined"
+						sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+					>
+						{!selectedAlmacen ? (
+							<Box
+								sx={{
+									flex: 1,
+									display: 'flex',
+									flexDirection: 'column',
+									alignItems: 'center',
+									justifyContent: 'center',
+									gap: 1,
+									color: 'text.secondary'
+								}}
+							>
+								<WarehouseIcon sx={{ fontSize: 48, opacity: 0.3 }} />
+								<Typography variant="body1">
+									Seleccione un almacén para ver sus sub-almacenes
+								</Typography>
+							</Box>
+						) : (
+							<>
+								<Box
+									sx={{
+										p: 2,
+										display: 'flex',
+										alignItems: 'center',
+										justifyContent: 'space-between'
+									}}
+								>
+									<Box>
+										<Typography variant="subtitle1" fontWeight={600}>
+											{selectedAlmacen.nombre}
+										</Typography>
+										{selectedAlmacen.descripcion && (
+											<Typography variant="body2" color="text.secondary">
+												{selectedAlmacen.descripcion}
+											</Typography>
+										)}
+									</Box>
+									<Button
+										variant="contained"
+										size="small"
+										startIcon={<AddIcon />}
+										onClick={() => openCreateDialog('sub')}
+									>
+										Nuevo sub-almacén
+									</Button>
+								</Box>
+								<Divider />
+								<Box sx={{ flex: 1, p: 2 }}>
+									<DataGrid
+										rows={subAlmacenes}
+										columns={subColumns}
+										loading={loadingSubs}
+										disableRowSelectionOnClick
+										density="comfortable"
+										getRowId={(r) => r.id}
+										slots={{
+											toolbar: () => (
+												<Box sx={{ p: 1, pb: 0 }}>
+													<GridToolbarQuickFilter slotProps={{ root: { placeholder: 'Buscar sub-almacén...' } }} />
+												</Box>
+											)
+										}}
+										initialState={{
+											pagination: { paginationModel: { pageSize: 25 } }
+										}}
+										pageSizeOptions={[10, 25, 50]}
+										sx={{ border: 'none', height: '100%' }}
+									/>
+								</Box>
+							</>
+						)}
+					</Paper>
+
+					{/* ── Diálogo crear / editar (compartido) ── */}
 					<Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} fullWidth maxWidth="sm">
-						<DialogTitle>{editingId ? 'Editar almacén' : 'Nuevo almacén'}</DialogTitle>
+						<DialogTitle>
+							{editingId ? `Editar ${dialogLabel}` : `Nuevo ${dialogLabel}`}
+						</DialogTitle>
 						<DialogContent dividers>
 							<Stack spacing={2.5} sx={{ pt: 0.5 }}>
 								<TextField
@@ -360,6 +520,15 @@ export default function AlmacenesPage() {
 									fullWidth
 									autoFocus
 								/>
+								{dialogTarget === 'sub' && (
+									<TextField
+										label="Sigla"
+										value={form.sigla}
+										onChange={(e) => setField('sigla', e.target.value)}
+										fullWidth
+										inputProps={{ maxLength: 20 }}
+									/>
+								)}
 								<TextField
 									label="Descripción"
 									value={form.descripcion}
@@ -367,38 +536,6 @@ export default function AlmacenesPage() {
 									fullWidth
 									multiline
 									rows={2}
-								/>
-								<TextField
-									select
-									label="Almacén superior"
-									value={form.parentId}
-									onChange={(e) =>
-										setField('parentId', e.target.value === '' ? '' : Number(e.target.value))
-									}
-									error={!!errors.parentId}
-									helperText={errors.parentId}
-									fullWidth
-								>
-									<MenuItem value="">
-										<em>Sin almacén superior (raíz)</em>
-									</MenuItem>
-									{parentOptions
-										.sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'))
-										.map((a) => (
-											<MenuItem key={a.id} value={a.id}>
-												{a.nombre}
-											</MenuItem>
-										))}
-								</TextField>
-								<FormControlLabel
-									control={
-										<Switch
-											checked={form.active}
-											onChange={(e) => setField('active', e.target.checked)}
-											color="success"
-										/>
-									}
-									label="Activo"
 								/>
 							</Stack>
 						</DialogContent>
@@ -412,29 +549,24 @@ export default function AlmacenesPage() {
 						</DialogActions>
 					</Dialog>
 
-					{/* Diálogo confirmar eliminación */}
-					<Dialog
-						open={!!deleteTarget}
-						onClose={() => setDeleteTarget(null)}
-						maxWidth="xs"
-						fullWidth
-					>
+					{/* ── Diálogo confirmar eliminación ── */}
+					<Dialog open={!!deleteInfo} onClose={() => setDeleteInfo(null)} maxWidth="xs" fullWidth>
 						<DialogTitle>Confirmar eliminación</DialogTitle>
 						<DialogContent>
 							<Typography>
-								¿Eliminar el almacén <strong>{deleteTarget?.nombre}</strong>? Esta acción no se puede
-								deshacer.
+								¿Eliminar {deleteInfo?.target === 'almacen' ? 'el almacén' : 'el sub-almacén'}{' '}
+								<strong>{deleteInfo?.nombre}</strong>? Esta acción no se puede deshacer.
 							</Typography>
 						</DialogContent>
 						<DialogActions sx={{ px: 3, py: 2 }}>
-							<Button onClick={() => setDeleteTarget(null)}>Cancelar</Button>
+							<Button onClick={() => setDeleteInfo(null)}>Cancelar</Button>
 							<Button
 								variant="contained"
 								color="error"
-								disabled={deleteMutation.isPending}
-								onClick={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
+								disabled={isDeleting}
+								onClick={confirmDelete}
 							>
-								{deleteMutation.isPending ? 'Eliminando...' : 'Eliminar'}
+								{isDeleting ? 'Eliminando...' : 'Eliminar'}
 							</Button>
 						</DialogActions>
 					</Dialog>

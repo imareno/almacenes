@@ -3,6 +3,9 @@ using Almacen.Helpers;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.OpenApi.Models;
 
+Dapper.DefaultTypeMap.MatchNamesWithUnderscores = true;
+Dapper.SqlMapper.AddTypeHandler(new Almacen.Helpers.DapperDateOnlyHandler());
+
 var builder = WebApplication.CreateBuilder(args);
 
 // ── Base de datos ─────────────────────────────────────────────
@@ -17,6 +20,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
         options.TokenValidationParameters = jwtHelper.GetValidationParameters();
+        options.MapInboundClaims = false;
     });
 
 builder.Services.AddAuthorization();

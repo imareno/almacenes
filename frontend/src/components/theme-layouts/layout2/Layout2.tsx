@@ -6,11 +6,8 @@ import useFuseLayoutSettings from '@fuse/core/FuseLayout/useFuseLayoutSettings';
 import FuseSuspense from '@fuse/core/FuseSuspense';
 import { Outlet } from 'react-router';
 import FooterLayout2 from './components/FooterLayout2';
-import LeftSideLayout2 from './components/LeftSideLayout2';
 import NavbarWrapperLayout2 from './components/NavbarWrapperLayout2';
-import RightSideLayout2 from './components/RightSideLayout2';
 import ToolbarLayout2 from './components/ToolbarLayout2';
-import Configurator from '../components/configurator/Configurator';
 
 const Root = styled('div')(({ config }: { config: Layout2ConfigDefaultsType }) => ({
 	...(config.mode === 'boxed' && {
@@ -41,9 +38,6 @@ type Layout2Props = {
 	children?: ReactNode;
 };
 
-/**
- * The layout 2.
- */
 function Layout2(props: Layout2Props) {
 	const { children } = props;
 
@@ -56,8 +50,6 @@ function Layout2(props: Layout2Props) {
 			className="flex w-full flex-auto"
 			config={config}
 		>
-			{config.leftSidePanel.display && <LeftSideLayout2 />}
-
 			<div className="flex min-w-0 flex-auto flex-col">
 				<main
 					id="fuse-main"
@@ -78,10 +70,6 @@ function Layout2(props: Layout2Props) {
 						/>
 					)}
 
-					<div className="sticky top-0 z-99">
-						<Configurator />
-					</div>
-
 					<div className="relative z-10 flex min-h-0 flex-auto flex-col">
 						<FuseSuspense>
 							<Outlet />
@@ -94,8 +82,6 @@ function Layout2(props: Layout2Props) {
 					)}
 				</main>
 			</div>
-
-			{config.rightSidePanel.display && <RightSideLayout2 />}
 		</Root>
 	);
 }

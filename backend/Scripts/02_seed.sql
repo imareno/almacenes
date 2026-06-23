@@ -13,14 +13,11 @@ INSERT INTO users (username, password_hash, role) VALUES
     ('visor1',       '$2a$12$XsOmNFkAnqOOlKnCTHiPOeZ.MQ0WXRWWriDuJzHkeMNGr.TW4IVCy', 'readonly')
 ON CONFLICT (username) DO NOTHING;
 
--- Almacén raíz y sub-almacenes
-INSERT INTO almacenes (nombre, descripcion, parent_id) VALUES
-    ('Almacén Central', 'Almacén principal de la empresa', NULL)
-ON CONFLICT DO NOTHING;
-
-INSERT INTO almacenes (nombre, descripcion, parent_id) VALUES
-    ('Almacén Norte', 'Depósito zona norte', (SELECT id FROM almacenes WHERE nombre = 'Almacén Central')),
-    ('Almacén Sur',   'Depósito zona sur',   (SELECT id FROM almacenes WHERE nombre = 'Almacén Central'))
+-- Almacenes
+INSERT INTO almacenes (nombre, descripcion) VALUES
+    ('Almacén Central', 'Almacén principal de la empresa'),
+    ('Almacén Norte', 'Depósito zona norte'),
+    ('Almacén Sur',   'Depósito zona sur')
 ON CONFLICT DO NOTHING;
 
 -- Materiales de ejemplo

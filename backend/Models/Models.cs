@@ -15,8 +15,19 @@ public class Almacen
     public int     Id          { get; set; }
     public string  Nombre      { get; set; } = "";
     public string? Descripcion { get; set; }
-    public int?    ParentId    { get; set; }
     public bool    Active      { get; set; }
+}
+
+public class SubAlmacen
+{
+    public int     Id                    { get; set; }
+    public int     AlmacenId             { get; set; }
+    public string  Nombre                { get; set; } = "";
+    public string? Sigla                 { get; set; }
+    public string? Descripcion           { get; set; }
+    public int     SecuenciaIngresos     { get; set; }
+    public int     SecuenciaSolicitudes  { get; set; }
+    public bool    Active                { get; set; }
 }
 
 public class Material
@@ -33,13 +44,16 @@ public class Material
 
 public class Compra
 {
-    public int      Id        { get; set; }
-    public string   Numero    { get; set; } = "";
-    public string   Proveedor { get; set; } = "";
-    public DateTime Fecha     { get; set; }
-    public string   Estado    { get; set; } = "borrador";
-    public int      UserId    { get; set; }
-    public DateTime CreatedAt { get; set; }
+    public int      Id            { get; set; }
+    public string?  Numero        { get; set; }
+    public string   Proveedor     { get; set; } = "";
+    public string   Detalle       { get; set; } = "";
+    public DateTime Fecha         { get; set; }
+    public string   Estado        { get; set; } = "pendiente";
+    public int      SubAlmacenId  { get; set; }
+    public int?     UserId        { get; set; }
+    public bool     Active        { get; set; }
+    public DateTime CreatedAt     { get; set; }
 }
 
 public class CompraItem

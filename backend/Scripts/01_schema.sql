@@ -17,7 +17,6 @@ CREATE TABLE IF NOT EXISTS almacenes (
     id          SERIAL PRIMARY KEY,
     nombre      VARCHAR(150) NOT NULL,
     descripcion TEXT,
-    parent_id   INT REFERENCES almacenes(id),
     active      BOOLEAN NOT NULL DEFAULT TRUE
 );
 
