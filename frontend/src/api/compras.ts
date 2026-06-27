@@ -47,8 +47,14 @@ export const getCompras = (params?: {
 	estado?: string;
 	page?: number;
 	pageSize?: number;
-}): Promise<PaginatedResponse> =>
-	api.get('compras', { searchParams: params as Record<string, string | number> }).json<PaginatedResponse>();
+}): Promise<PaginatedResponse> => {
+	const sp: Record<string, string | number> = {};
+	if (params?.subAlmacenId != null) sp.subAlmacenId = params.subAlmacenId;
+	if (params?.estado) sp.estado = params.estado;
+	if (params?.page != null) sp.page = params.page;
+	if (params?.pageSize != null) sp.pageSize = params.pageSize;
+	return api.get('compras', { searchParams: sp }).json<PaginatedResponse>();
+};
 
 export const getCompra = (id: number): Promise<{ compra: CompraDetail; items: CompraItem[] }> =>
 	api.get(`compras/${id}`).json<{ compra: CompraDetail; items: CompraItem[] }>();

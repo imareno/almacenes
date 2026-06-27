@@ -4,7 +4,6 @@ import { useSnackbar } from 'notistack';
 import FusePageSimple from '@fuse/core/FusePageSimple';
 import { styled } from '@mui/material/styles';
 import {
-	Autocomplete,
 	Box,
 	Button,
 	Chip,
@@ -48,7 +47,7 @@ import {
 	deleteCompraItem
 } from '../../../api/compras';
 import { AlmacenAsignado, getAlmacenesAsignados } from '../../../api/almacenes';
-import { Material, getMateriales } from '../../../api/materiales';
+import { getMateriales } from '../../../api/materiales';
 
 // ─── tipos ───────────────────────────────────────────────────────────────────
 
@@ -111,6 +110,7 @@ export default function ComprasPage() {
 	const handleApiError = useApiError();
 
 	const [filtroSubAlmacenId, setFiltroSubAlmacenId] = useState<number | ''>('');
+	const [filtroEstado, setFiltroEstado] = useState('');
 	const [selectedCompraId, setSelectedCompraId] = useState<number | null>(null);
 
 	// diálogo compra
@@ -120,6 +120,7 @@ export default function ComprasPage() {
 	const [compraErrors, setCompraErrors] = useState<Record<string, string>>({});
 
 	// diálogo item
+	const [materialSearch, setMaterialSearch] = useState('');
 	const [itemDialogOpen, setItemDialogOpen] = useState(false);
 	const [editingItemId, setEditingItemId] = useState<number | null>(null);
 	const [itemForm, setItemForm] = useState<ItemFormState>(ITEM_FORM_EMPTY);
@@ -138,8 +139,13 @@ export default function ComprasPage() {
 	});
 
 	const { data: comprasData, isLoading: loadingCompras } = useQuery({
-		queryKey: ['compras', filtroSubAlmacenId],
-		queryFn: () => getCompras({ subAlmacenId: filtroSubAlmacenId || undefined, pageSize: 100 })
+		queryKey: ['compras', filtroSubAlmacenId, filtroEstado],
+		queryFn: () => getCompras({
+			subAlmacenId: filtroSubAlmacenId || undefined,
+			estado: filtroEstado || undefined,
+			pageSize: 100
+		}),
+		enabled: filtroSubAlmacenId !== ''
 	});
 	const compras = comprasData?.items ?? [];
 
@@ -151,9 +157,12 @@ export default function ComprasPage() {
 	const selectedCompra = compraDetail?.compra ?? null;
 	const compraItems = compraDetail?.items ?? [];
 
+	const compraAlmacenId = selectedCompra?.almacenId;
+	const searchReady = materialSearch.trim().length >= 4;
 	const { data: materialesData } = useQuery({
-		queryKey: ['materiales-all'],
-		queryFn: () => getMateriales({ soloActivos: true, pageSize: 1000 })
+		queryKey: ['materiales-compra', compraAlmacenId, materialSearch.trim()],
+		queryFn: () => getMateriales({ almacenId: compraAlmacenId!, buscar: materialSearch.trim(), soloActivos: true, pageSize: 1000 }),
+		enabled: compraAlmacenId != null && compraAlmacenId > 0 && searchReady
 	});
 	const materiales = materialesData?.items ?? [];
 
@@ -292,6 +301,7 @@ export default function ComprasPage() {
 		setEditingItemId(null);
 		setItemForm(ITEM_FORM_EMPTY);
 		setItemErrors({});
+		setMaterialSearch('');
 		setItemDialogOpen(true);
 	}
 
@@ -304,6 +314,7 @@ export default function ComprasPage() {
 			unidadMedida: item.unidadMedida
 		});
 		setItemErrors({});
+		setMaterialSearch(item.materialNombre);
 		setItemDialogOpen(true);
 	}
 
@@ -327,12 +338,8 @@ export default function ComprasPage() {
 		else addItemMut.mutate(data);
 	}
 
-	function onMaterialSelect(mat: Material | null) {
-		if (mat) {
-			setItemForm((p) => ({ ...p, materialId: mat.id, unidadMedida: mat.unidadMedida }));
-		} else {
-			setItemForm((p) => ({ ...p, materialId: '', unidadMedida: '' }));
-		}
+	function onMaterialChange(materialId: number | '') {
+		setItemForm((p) => ({ ...p, materialId }));
 		if (itemErrors.materialId) setItemErrors((p) => ({ ...p, materialId: '' }));
 	}
 
@@ -380,14 +387,14 @@ export default function ComprasPage() {
 			}
 			content={
 				<Box sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column', gap: 2 }}>
-					{/* Filtro almacén */}
+					{/* Filtros */}
 					<Stack direction="row" spacing={2} alignItems="center">
 						<TextField
-							select label="Filtrar por sub-almacén" value={filtroSubAlmacenId}
+							select label="Sub-almacén" value={filtroSubAlmacenId}
 							onChange={(e) => { setFiltroSubAlmacenId(e.target.value === '' ? '' : Number(e.target.value)); setSelectedCompraId(null); }}
-							size="small" sx={{ width: 300 }}
+							size="small" sx={{ width: 280 }}
 						>
-							<MenuItem value="">Todos mis sub-almacenes</MenuItem>
+							<MenuItem value=""><em>Todos mis sub-almacenes</em></MenuItem>
 							{almacenesAsignados.flatMap((a) => [
 								<ListSubheader key={`h-${a.id}`}>{a.nombre}</ListSubheader>,
 								...a.subAlmacenes.map((s) => (
@@ -396,6 +403,16 @@ export default function ComprasPage() {
 									</MenuItem>
 								))
 							])}
+						</TextField>
+						<TextField
+							select label="Estado" value={filtroEstado}
+							onChange={(e) => setFiltroEstado(e.target.value)}
+							size="small" sx={{ width: 150 }}
+						>
+							<MenuItem value=""><em>Todos</em></MenuItem>
+							<MenuItem value="pendiente">Pendiente</MenuItem>
+							<MenuItem value="concluido">Concluido</MenuItem>
+							<MenuItem value="generado">Generado</MenuItem>
 						</TextField>
 					</Stack>
 
@@ -409,7 +426,8 @@ export default function ComprasPage() {
 							<Divider />
 							<List sx={{ flex: 1, overflow: 'auto', py: 0 }}>
 								{loadingCompras && <Box sx={{ p: 2, textAlign: 'center' }}><Typography variant="body2" color="text.secondary">Cargando...</Typography></Box>}
-								{!loadingCompras && compras.length === 0 && <Box sx={{ p: 2, textAlign: 'center' }}><Typography variant="body2" color="text.secondary">Sin compras</Typography></Box>}
+								{!loadingCompras && !filtroSubAlmacenId && <Box sx={{ p: 2, textAlign: 'center' }}><Typography variant="body2" color="text.secondary">Seleccione un sub-almacén para ver las compras</Typography></Box>}
+								{!loadingCompras && !!filtroSubAlmacenId && compras.length === 0 && <Box sx={{ p: 2, textAlign: 'center' }}><Typography variant="body2" color="text.secondary">Sin compras</Typography></Box>}
 								{compras.map((c) => (
 									<ListItemButton key={c.id} selected={selectedCompraId === c.id} onClick={() => setSelectedCompraId(c.id)} sx={{ gap: 1 }}>
 										<ListItemText
@@ -520,13 +538,32 @@ export default function ComprasPage() {
 						<DialogTitle>{editingItemId ? 'Editar ítem' : 'Agregar ítem'}</DialogTitle>
 						<DialogContent dividers>
 							<Stack spacing={2.5} sx={{ pt: 0.5 }}>
-								<Autocomplete
-									options={materiales} getOptionLabel={(m) => `${m.codigo} — ${m.nombre}`}
-									value={materiales.find((m) => m.id === itemForm.materialId) ?? null}
-									onChange={(_, val) => onMaterialSelect(val)}
-									renderInput={(params) => (<TextField {...params} label="Material *" error={!!itemErrors.materialId} helperText={itemErrors.materialId} />)}
-									isOptionEqualToValue={(opt, val) => opt.id === val.id}
-								/>
+								<TextField
+									select label="Material *" value={itemForm.materialId}
+									onChange={(e) => onMaterialChange(e.target.value === '' ? '' : Number(e.target.value))}
+									error={!!itemErrors.materialId} helperText={itemErrors.materialId}
+									fullWidth
+									slotProps={{ select: { MenuProps: { PaperProps: { sx: { maxHeight: 450 } } } } }}
+								>
+									<ListSubheader sx={{ p: 1 }}>
+										<TextField
+											size="small" placeholder="Escriba al menos 4 letras..."
+											fullWidth autoFocus
+											value={materialSearch}
+											onChange={(e) => setMaterialSearch(e.target.value)}
+											onKeyDown={(e) => e.stopPropagation()}
+										/>
+									</ListSubheader>
+									{!searchReady && (
+										<MenuItem disabled>Escriba al menos 4 letras para buscar</MenuItem>
+									)}
+									{searchReady && materiales.length === 0 && (
+										<MenuItem disabled>Sin resultados</MenuItem>
+									)}
+									{materiales.map((m) => (
+										<MenuItem key={m.id} value={m.id}>{m.codigo} — {m.nombre}</MenuItem>
+									))}
+								</TextField>
 								<Stack direction="row" spacing={2}>
 									<TextField label="Cantidad *" type="number" value={itemForm.cantidad}
 										onChange={(e) => { setItemForm((p) => ({ ...p, cantidad: e.target.value })); if (itemErrors.cantidad) setItemErrors((p) => ({ ...p, cantidad: '' })); }}
