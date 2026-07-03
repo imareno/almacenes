@@ -55,8 +55,6 @@ interface CompraFormState {
 	proveedor: string;
 	detalle: string;
 	fecha: string;
-	almacenId: number | '';
-	subAlmacenId: number | '';
 }
 
 interface ItemFormState {
@@ -67,8 +65,7 @@ interface ItemFormState {
 }
 
 const COMPRA_FORM_EMPTY: CompraFormState = {
-	proveedor: '', detalle: '', fecha: new Date().toISOString().slice(0, 10),
-	almacenId: '', subAlmacenId: ''
+	proveedor: '', detalle: '', fecha: new Date().toISOString().slice(0, 10)
 };
 
 const ITEM_FORM_EMPTY: ItemFormState = {
@@ -76,7 +73,7 @@ const ITEM_FORM_EMPTY: ItemFormState = {
 };
 
 const estadoColor: Record<string, 'warning' | 'success' | 'info'> = {
-	pendiente: 'warning', concluido: 'success', generado: 'info'
+	pendiente: 'warning', concluido: 'success'
 };
 
 // ─── layout ──────────────────────────────────────────────────────────────────
@@ -166,9 +163,9 @@ export default function ComprasPage() {
 	});
 	const materiales = materialesData?.items ?? [];
 
-	const subAlmacenesForm = compraForm.almacenId !== ''
-		? almacenesAsignados.find((a) => a.id === compraForm.almacenId)?.subAlmacenes ?? []
-		: [];
+	const subAlmacenSeleccionado = filtroSubAlmacenId !== ''
+		? almacenesAsignados.flatMap(a => a.subAlmacenes).find(s => s.id === filtroSubAlmacenId)
+		: null;
 
 	const invalidateCompras = () => {
 		queryClient.invalidateQueries({ queryKey: ['compras'] });
@@ -263,13 +260,10 @@ export default function ComprasPage() {
 
 	function openEditCompra(c: CompraListItem) {
 		setEditingCompraId(c.id);
-		const almacen = almacenesAsignados.find((a) => a.subAlmacenes.some((s) => s.id === c.subAlmacenId));
 		setCompraForm({
 			proveedor: c.proveedor,
 			detalle: c.detalle,
-			fecha: c.fecha.slice(0, 10),
-			almacenId: almacen?.id ?? '',
-			subAlmacenId: c.subAlmacenId
+			fecha: c.fecha.slice(0, 10)
 		});
 		setCompraErrors({});
 		setCompraDialogOpen(true);
@@ -280,15 +274,18 @@ export default function ComprasPage() {
 		if (!compraForm.proveedor.trim()) next.proveedor = 'Requerido';
 		if (!compraForm.detalle.trim()) next.detalle = 'Requerido';
 		if (!compraForm.fecha) next.fecha = 'Requerido';
-		if (compraForm.subAlmacenId === '') next.subAlmacenId = 'Requerido';
 		setCompraErrors(next);
 		if (Object.keys(next).length > 0) return;
+
+		const subAlmacenId = editingCompraId
+			? compras.find((c) => c.id === editingCompraId)!.subAlmacenId
+			: filtroSubAlmacenId as number;
 
 		const data: CompraCreateInput = {
 			proveedor: compraForm.proveedor.trim(),
 			detalle: compraForm.detalle.trim(),
 			fecha: compraForm.fecha,
-			subAlmacenId: compraForm.subAlmacenId as number
+			subAlmacenId
 		};
 
 		if (editingCompraId) updateCompraMut.mutate({ id: editingCompraId, data });
@@ -412,7 +409,6 @@ export default function ComprasPage() {
 							<MenuItem value=""><em>Todos</em></MenuItem>
 							<MenuItem value="pendiente">Pendiente</MenuItem>
 							<MenuItem value="concluido">Concluido</MenuItem>
-							<MenuItem value="generado">Generado</MenuItem>
 						</TextField>
 					</Stack>
 
@@ -421,7 +417,13 @@ export default function ComprasPage() {
 						<Paper variant="outlined" sx={{ flex: '0 0 40%', minWidth: 280, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 							<Box sx={{ p: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
 								<Typography variant="subtitle1" fontWeight={600}>Compras</Typography>
-								<Tooltip title="Nueva compra"><IconButton size="small" color="primary" onClick={openCreateCompra}><AddIcon /></IconButton></Tooltip>
+								<Tooltip title={filtroSubAlmacenId === '' ? 'Seleccione un sub-almacén en el filtro' : ''}>
+									<span>
+										<Button variant="contained" size="small" startIcon={<AddIcon />} onClick={openCreateCompra} disabled={filtroSubAlmacenId === ''}>
+											Nueva Compra
+										</Button>
+									</span>
+								</Tooltip>
 							</Box>
 							<Divider />
 							<List sx={{ flex: 1, overflow: 'auto', py: 0 }}>
@@ -433,11 +435,11 @@ export default function ComprasPage() {
 										<ListItemText
 											primary={
 												<Stack direction="row" spacing={1} alignItems="center">
-													<Typography variant="body2" fontWeight={600}>{c.numero ?? `#${c.id}`}</Typography>
+													<Typography variant="body2" fontWeight={600}>{c.numero ?? 'Borrador'}</Typography>
 													<Chip label={c.estado} color={estadoColor[c.estado] ?? 'default'} size="small" variant="outlined" sx={{ textTransform: 'capitalize', height: 20, fontSize: 11 }} />
 												</Stack>
 											}
-											secondary={`${c.proveedor} — ${c.subAlmacenNombre}`}
+											secondary={`${c.proveedor} — ${new Date(c.fecha).toLocaleDateString('es-BO')}`}
 											slotProps={{ secondary: { noWrap: true } }}
 										/>
 										{c.estado === 'pendiente' && (
@@ -465,15 +467,12 @@ export default function ComprasPage() {
 										<Box>
 											<Stack direction="row" spacing={1} alignItems="center">
 												<Typography variant="subtitle1" fontWeight={600}>
-													{selectedCompra.numero ?? `Borrador #${selectedCompra.id}`}
+													{selectedCompra.numero ?? 'Borrador'}
 												</Typography>
 												<Chip label={selectedCompra.estado} color={estadoColor[selectedCompra.estado] ?? 'default'} size="small" variant="outlined" sx={{ textTransform: 'capitalize' }} />
 											</Stack>
 											<Typography variant="body2" color="text.secondary">
 												{selectedCompra.proveedor} — {selectedCompra.detalle}
-											</Typography>
-											<Typography variant="caption" color="text.secondary">
-												{selectedCompra.subAlmacenNombre} ({selectedCompra.almacenNombre})
 											</Typography>
 										</Box>
 										<Stack direction="row" spacing={1} alignItems="center">
@@ -514,17 +513,11 @@ export default function ComprasPage() {
 								<TextField label="Fecha *" type="date" value={compraForm.fecha}
 									onChange={(e) => setCompraForm((p) => ({ ...p, fecha: e.target.value }))}
 									error={!!compraErrors.fecha} helperText={compraErrors.fecha} fullWidth slotProps={{ inputLabel: { shrink: true } }} />
-								<TextField select label="Almacén *" value={compraForm.almacenId}
-									onChange={(e) => setCompraForm((p) => ({ ...p, almacenId: e.target.value === '' ? '' : Number(e.target.value), subAlmacenId: '' }))} fullWidth>
-									<MenuItem value=""><em>Seleccione un almacén</em></MenuItem>
-									{almacenesAsignados.map((a) => (<MenuItem key={a.id} value={a.id}>{a.nombre}</MenuItem>))}
-								</TextField>
-								<TextField select label="Sub-almacén *" value={compraForm.subAlmacenId}
-									onChange={(e) => { setCompraForm((p) => ({ ...p, subAlmacenId: e.target.value === '' ? '' : Number(e.target.value) })); if (compraErrors.subAlmacenId) setCompraErrors((p) => ({ ...p, subAlmacenId: '' })); }}
-									error={!!compraErrors.subAlmacenId} helperText={compraErrors.subAlmacenId} fullWidth disabled={compraForm.almacenId === ''}>
-									<MenuItem value=""><em>{compraForm.almacenId === '' ? 'Seleccione primero un almacén' : 'Seleccione un sub-almacén'}</em></MenuItem>
-									{subAlmacenesForm.map((s) => (<MenuItem key={s.id} value={s.id}>{s.sigla ? `${s.sigla} — ${s.nombre}` : s.nombre}</MenuItem>))}
-								</TextField>
+								{subAlmacenSeleccionado && (
+									<Typography variant="body2" color="text.secondary">
+										Sub-almacén: <strong>{subAlmacenSeleccionado.sigla ? `${subAlmacenSeleccionado.sigla} — ${subAlmacenSeleccionado.nombre}` : subAlmacenSeleccionado.nombre}</strong>
+									</Typography>
+								)}
 							</Stack>
 						</DialogContent>
 						<DialogActions sx={{ px: 3, py: 2 }}>
@@ -586,7 +579,7 @@ export default function ComprasPage() {
 					{/* ── Diálogo concluir ── */}
 					<Dialog open={!!concluirTarget} onClose={() => setConcluirTarget(null)} maxWidth="xs" fullWidth>
 						<DialogTitle>Concluir compra</DialogTitle>
-						<DialogContent><Typography>¿Concluir la compra <strong>#{concluirTarget?.id}</strong>? Se generará el número automáticamente.</Typography></DialogContent>
+						<DialogContent><Typography>¿Concluir la compra de <strong>{concluirTarget?.proveedor}</strong>? Se generará el número automáticamente.</Typography></DialogContent>
 						<DialogActions sx={{ px: 3, py: 2 }}>
 							<Button onClick={() => setConcluirTarget(null)}>Cancelar</Button>
 							<Button variant="contained" color="success" disabled={concluirMut.isPending} onClick={() => concluirTarget && concluirMut.mutate(concluirTarget.id)}>
@@ -598,7 +591,7 @@ export default function ComprasPage() {
 					{/* ── Diálogo eliminar compra ── */}
 					<Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)} maxWidth="xs" fullWidth>
 						<DialogTitle>Eliminar compra</DialogTitle>
-						<DialogContent><Typography>¿Eliminar la compra <strong>#{deleteTarget?.id}</strong>?</Typography></DialogContent>
+						<DialogContent><Typography>¿Eliminar la compra de <strong>{deleteTarget?.proveedor}</strong>?</Typography></DialogContent>
 						<DialogActions sx={{ px: 3, py: 2 }}>
 							<Button onClick={() => setDeleteTarget(null)}>Cancelar</Button>
 							<Button variant="contained" color="error" disabled={deleteCompraMut.isPending} onClick={() => deleteTarget && deleteCompraMut.mutate(deleteTarget.id)}>
