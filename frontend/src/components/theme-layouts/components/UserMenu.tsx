@@ -157,20 +157,31 @@ function UserMenu(props: UserMenuProps) {
 							<ListItemText primary="Sign up" />
 						</MenuItem>
 					</>
-				) : (
-					<>
-						<MenuItem
-							onClick={() => {
-								signOut();
-							}}
-						>
-							<ListItemIcon>
-								<FuseSvgIcon>lucide:square-arrow-right</FuseSvgIcon>
-							</ListItemIcon>
-							<ListItemText primary="Sign out" />
-						</MenuItem>
-					</>
-				)}
+			) : (
+				<>
+					<MenuItem
+						component={Link}
+						to="/perfil"
+						role="button"
+						onClick={userMenuClose}
+					>
+						<ListItemIcon>
+							<FuseSvgIcon>lucide:user-cog</FuseSvgIcon>
+						</ListItemIcon>
+						<ListItemText primary="Perfil" />
+					</MenuItem>
+					<MenuItem
+						onClick={() => {
+							signOut();
+						}}
+					>
+						<ListItemIcon>
+							<FuseSvgIcon>lucide:square-arrow-right</FuseSvgIcon>
+						</ListItemIcon>
+						<ListItemText primary="Cerrar Sesión" />
+					</MenuItem>
+				</>
+			)}
 			</Popover>
 		</>
 	);
