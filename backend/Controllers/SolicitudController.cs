@@ -15,14 +15,13 @@ public class SolicitudController : ControllerBase
 
     public SolicitudController(Db db) => _db = db;
 
-    // GET /api/solicitudes?estado=&almacenId=&solicitanteId=&page=1&pageSize=20
+    // GET /api/solicitudes?estado=&solicitanteId=&page=1&pageSize=20
     [HttpGet]
     public async Task<IActionResult> GetAll(
-        [FromQuery] string? estado       = null,
-        [FromQuery] int?    almacenId    = null,
+        [FromQuery] string? estado        = null,
         [FromQuery] int?    solicitanteId = null,
-        [FromQuery] int     page         = 1,
-        [FromQuery] int     pageSize     = 20)
+        [FromQuery] int     page          = 1,
+        [FromQuery] int     pageSize      = 20)
     {
         if (page < 1)       page     = 1;
         if (pageSize < 1)   pageSize = 20;
@@ -33,7 +32,7 @@ public class SolicitudController : ControllerBase
 
         using var conn = _db.CreateConnection();
 
-        var where = new List<string>();
+        var where = new List<string> { "s.active = true" };
         var p     = new DynamicParameters();
 
         // Solicitante solo ve sus propias solicitudes
@@ -54,13 +53,7 @@ public class SolicitudController : ControllerBase
             p.Add("estado", estado.ToLower().Trim());
         }
 
-        if (almacenId.HasValue)
-        {
-            where.Add("s.almacen_id = @almacenId");
-            p.Add("almacenId", almacenId.Value);
-        }
-
-        var clausula = where.Count > 0 ? "WHERE " + string.Join(" AND ", where) : "";
+        var clausula = "WHERE " + string.Join(" AND ", where);
 
         var total = await conn.ExecuteScalarAsync<int>(
             $"SELECT COUNT(*) FROM solicitudes s {clausula}", p);
@@ -71,14 +64,16 @@ public class SolicitudController : ControllerBase
         var items = await conn.QueryAsync<SolicitudRow>(
             $@"SELECT s.id, s.numero, s.estado,
                       s.solicitante_id, us.username AS solicitante,
-                      s.almacen_id, a.nombre AS almacen_nombre,
+                      s.sub_almacen_id, sa.nombre AS sub_almacen_nombre, sa.sigla,
+                      a.id AS almacen_id, a.nombre AS almacen_nombre,
                       s.aprobador_id, ua.username AS aprobador,
                       s.almacenero_id, ual.username AS almacenero,
                       s.fecha_solicitud, s.fecha_aprobacion, s.fecha_despacho, s.fecha_entrega,
                       s.observacion, s.created_at
                FROM solicitudes s
-               JOIN users    us  ON us.id  = s.solicitante_id
-               JOIN almacenes a  ON a.id   = s.almacen_id
+               JOIN users          us  ON us.id  = s.solicitante_id
+               JOIN sub_almacenes  sa  ON sa.id  = s.sub_almacen_id
+               JOIN almacenes      a   ON a.id   = sa.almacen_id
                LEFT JOIN users ua  ON ua.id  = s.aprobador_id
                LEFT JOIN users ual ON ual.id = s.almacenero_id
                {clausula}
@@ -100,14 +95,16 @@ public class SolicitudController : ControllerBase
         var solicitud = await conn.QuerySingleOrDefaultAsync<SolicitudRow>(
             @"SELECT s.id, s.numero, s.estado,
                      s.solicitante_id, us.username AS solicitante,
-                     s.almacen_id, a.nombre AS almacen_nombre,
+                     s.sub_almacen_id, sa.nombre AS sub_almacen_nombre, sa.sigla,
+                     a.id AS almacen_id, a.nombre AS almacen_nombre,
                      s.aprobador_id, ua.username AS aprobador,
                      s.almacenero_id, ual.username AS almacenero,
                      s.fecha_solicitud, s.fecha_aprobacion, s.fecha_despacho, s.fecha_entrega,
                      s.observacion, s.created_at
               FROM solicitudes s
-              JOIN users     us  ON us.id  = s.solicitante_id
-              JOIN almacenes a   ON a.id   = s.almacen_id
+              JOIN users          us  ON us.id  = s.solicitante_id
+              JOIN sub_almacenes  sa  ON sa.id  = s.sub_almacen_id
+              JOIN almacenes      a   ON a.id   = sa.almacen_id
               LEFT JOIN users ua  ON ua.id  = s.aprobador_id
               LEFT JOIN users ual ON ual.id = s.almacenero_id
               WHERE s.id = @id",
@@ -144,21 +141,20 @@ public class SolicitudController : ControllerBase
 
         try
         {
-            var almacenExiste = await conn.ExecuteScalarAsync<int?>(
-                "SELECT id FROM almacenes WHERE id = @id AND active = true",
-                new { id = req.AlmacenId }, tx);
+            var subExiste = await conn.ExecuteScalarAsync<int?>(
+                "SELECT id FROM sub_almacenes WHERE id = @id AND active = true",
+                new { id = req.SubAlmacenId }, tx);
 
-            if (almacenExiste is null)
-                return BadRequest(new { error = "Almacén no encontrado o inactivo" });
+            if (subExiste is null)
+                return BadRequest(new { error = "Sub-almacén no encontrado o inactivo" });
 
             var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
-            // Insertar con numero temporal; actualizar con ID formateado
             var solId = await conn.ExecuteScalarAsync<int>(
-                @"INSERT INTO solicitudes (numero, solicitante_id, almacen_id, observacion)
-                  VALUES ('TEMP', @userId, @almacenId, @obs)
+                @"INSERT INTO solicitudes (numero, solicitante_id, sub_almacen_id, observacion)
+                  VALUES ('TEMP', @userId, @subAlmacenId, @obs)
                   RETURNING id",
-                new { userId, almacenId = req.AlmacenId, obs = req.Observacion?.Trim() }, tx);
+                new { userId, subAlmacenId = req.SubAlmacenId, obs = req.Observacion?.Trim() }, tx);
 
             var numero = $"SOL-{DateTime.UtcNow:yyyy}-{solId:D6}";
             await conn.ExecuteAsync(
@@ -259,7 +255,11 @@ public class SolicitudController : ControllerBase
         try
         {
             var sol = await conn.QuerySingleOrDefaultAsync<SolConAlmacen>(
-                "SELECT id, estado, almacen_id FROM solicitudes WHERE id = @id", new { id }, tx);
+                @"SELECT s.id, s.estado, sa.almacen_id
+                  FROM solicitudes s
+                  JOIN sub_almacenes sa ON sa.id = s.sub_almacen_id
+                  WHERE s.id = @id",
+                new { id }, tx);
 
             if (sol is null) return NotFound(new { error = "Solicitud no encontrada" });
             if (sol.Estado != "aprobada")
@@ -425,6 +425,7 @@ public class SolicitudController : ControllerBase
     private record SolicitudRow(
         int Id, string Numero, string Estado,
         int SolicitanteId, string Solicitante,
+        int SubAlmacenId, string SubAlmacenNombre, string? Sigla,
         int AlmacenId, string AlmacenNombre,
         int? AprobadorId, string? Aprobador,
         int? AlmaceneroId, string? Almacenero,
@@ -444,7 +445,7 @@ public class SolicitudController : ControllerBase
 
 // ── Request DTOs ──────────────────────────────────────────────
 public record SolicitudItemRequest(int MaterialId, decimal Cantidad);
-public record SolicitudCreateRequest(int AlmacenId, List<SolicitudItemRequest> Items, string? Observacion = null);
+public record SolicitudCreateRequest(int SubAlmacenId, List<SolicitudItemRequest> Items, string? Observacion = null);
 public record ObservacionRequest(string? Observacion);
 public record DespachoItemRequest(int SolicitudItemId, decimal CantidadDespachada);
 public record DespachoRequest(DateOnly Fecha, List<DespachoItemRequest> Items);

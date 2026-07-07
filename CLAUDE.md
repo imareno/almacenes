@@ -49,6 +49,7 @@
     06_almacen_encargado_rol.sql → columna rol en almacen_encargado (ya no se usa, reemplazada por admin)
     07_sub_almacenes.sql         → tabla sub_almacenes (detalle de almacenes)
     08_almacen_encargado_admin.sql → columna admin en almacen_encargado
+    09_perfil.sql                → tabla perfil (persona_id, sub_almacen_id, aprobador_id)
 
 /frontend                    → Fuse React Template (TypeScript)
   vite.config.mts            → proxy /api → localhost:5252, port 3000
@@ -63,6 +64,8 @@
       almacenes.ts           → CRUD almacenes + sub-almacenes + asignados
       compras.ts             → CRUD compras + compra_items
       materiales.ts          → getMateriales (para selects)
+      solicitudes.ts         → ✅ CRUD solicitudes + acciones (aprobar, rechazar, despachar, entregar, cancelar)
+      perfil.ts              → 🟡 getMyPerfil, savePerfil, getSubAlmacenesPerfil, getUsuarios
     app/
       (public)/(auth)/       → login, sign-up (disabled), sign-out
       (control-panel)/
@@ -70,6 +73,8 @@
         compras/             → ✅ CRUD con paginación servidor, filtros, flujo estados
         dashboard/           → placeholder (solo título)
         example/             → demo del template (no borrar por ahora)
+        solicitudes/         → ✅ Split view 40/60, filtros almacén+estado, 6 acciones por rol
+        perfil/              → 🟡 formulario single-select sub-almacén + aprobador, PUT guarda todo
     configs/
       settingsConfig.ts      → layout1 fullwidth, footer off, tema legacy/defaultDark, roles, redirect /dashboard
       navigationConfig.ts    → ítems del sidebar (todos los módulos)
@@ -147,6 +152,12 @@ sesiones        → id, user_id, username, ip_address, user_agent,
 almacen_encargado → almacen_id, user_id, admin, active, created_at
   (user_id es ID del servicio externo — sin FK local)
   admin=true → rol 'admin' | admin=false → rol 'almacenero' | no en tabla → rol 'solicitante'
+
+-- Perfil del usuario (configuración sub-almacén + aprobador por defecto)
+perfil          → id, persona_id, sub_almacen_id (FK sub_almacenes),
+                   aprobador_id (FK users), created_at
+  UNIQUE(persona_id, sub_almacen_id)
+  persona_id = user_id del JWT (servicio externo)
 ```
 
 ## Auth — integración con servicio externo
@@ -294,6 +305,12 @@ GROUP BY material_id, almacen_id
 - GET /api/reportes/compras                  → resumen por período
 - GET /api/reportes/movimientos              → entradas/salidas con resumen por tipo
 
+### Perfil 🟡
+- GET    /api/perfil                         → perfil actual del usuario (con nombres)
+- PUT    /api/perfil                         → reemplaza perfil (subAlmacenIds + aprobadorId)
+- GET    /api/perfil/sub-almacenes           → todos los sub-almacenes activos agrupados por almacén
+- GET    /api/perfil/usuarios                → lista de usuarios activos (para selectores)
+
 ## Frontend — React + Fuse (MUI) — TypeScript
 
 ### Estado actual
@@ -314,15 +331,13 @@ GROUP BY material_id, almacen_id
 ### Páginas construidas
 - /almacenes              → ✅ CRUD maestro-detalle split view 30/70 (almacenes + sub-almacenes)
 - /compras                → ✅ Split view 40/60: lista compras + detalle items. Filtro por sub-almacén (agrupado por almacén). CRUD cabecera + CRUD items. Número auto-generado al concluir. Autocomplete materiales.
+- /solicitudes            → ✅ Split view 40/60: lista solicitudes + detalle items. Filtros almacén+estado. 6 acciones según rol+estado (aprobar, rechazar, despachar, entregar, cancelar). Crear con búsqueda de materiales.
+- /perfil                 → 🟡 Formulario single-select sub-almacén (agrupado por almacén) + aprobador. PUT guarda todo. Pendiente: obtener aprobadores de servicio externo.
 - /dashboard              → placeholder (solo título, sin KPIs)
 
 ### Páginas por construir
 - /materiales             → tabla + formulario ABM
 - /movimientos            → tabla con filtros avanzados
-- /solicitudes            → vista según rol:
-    solicitante           → mis solicitudes + nueva solicitud
-    aprobador             → bandeja pendientes
-    almacenero            → despacho y entrega
 - /reportes/existencias   → tabla con existencias por almacén
 - /reportes/kardex        → tabla historial movimientos por material
 - /reportes/valorizado    → tabla existencias valorizadas PEPS
@@ -339,7 +354,8 @@ app/(control-panel)/
   dashboard/                  → route.tsx + DashboardPage.tsx (placeholder)
   materiales/                 → POR CREAR
   movimientos/                → POR CREAR
-  solicitudes/                → POR CREAR
+  solicitudes/                → ✅ route.tsx + SolicitudesPage.tsx (split view + acciones)
+  perfil/                     → 🟡 route.tsx + PerfilPage.tsx (single-select form)
   reportes/
     existencias/              → POR CREAR
     kardex/                   → POR CREAR
@@ -352,7 +368,8 @@ api/                          → un archivo por módulo (TypeScript)
   compras.ts                  → ✅ CRUD compras + compra_items
   materiales.ts               → ✅ getMateriales (para selects en compra_items)
   movimientos.ts              → POR CREAR
-  solicitudes.ts              → POR CREAR
+  solicitudes.ts              → ✅ CRUD solicitudes + todas las acciones
+  perfil.ts                   → ✅ getMyPerfil, savePerfil, getSubAlmacenesPerfil, getUsuarios
   reportes.ts                 → POR CREAR
 ```
 
@@ -407,15 +424,16 @@ api/                          → un archivo por módulo (TypeScript)
 ## Estado de módulos
 
 ### Fase 1 — Backend ✅ COMPLETO
-- ✅ Scripts SQL (01_schema.sql al 08_almacen_encargado_admin.sql)
+- ✅ Scripts SQL (01_schema.sql al 09_perfil.sql)
 - ✅ Program.cs + Db.cs + JwtHelper + DapperDateOnlyHandler (MapInboundClaims=false, MatchNamesWithUnderscores=true)
 - ✅ AuthController (login externo + refresh + logout + sesiones + lógica admin/almacenero/solicitante)
 - ✅ AlmacenController (CRUD almacenes + sub-almacenes con validaciones de eliminación)
 - ✅ MaterialController
-- ✅ CompraController (CRUD + flujo pendiente→concluido→generado, depende de sub_almacen_id)
+- ✅ CompraController (CRUD + flujo pendiente→concluido, depende de sub_almacen_id)
 - ✅ MovimientoController + PepsHelper
-- ✅ SolicitudController (flujo completo 5 acciones, depende de sub_almacen_id)
+- ✅ SolicitudController (flujo completo 5 acciones, depende de almacen_id)
 - ✅ ReporteController
+- ✅ PerfilController (GET perfil, PUT perfil, GET sub-almacenes, GET usuarios)
 
 ### Fase 2 — Frontend 🔄 EN CURSO
 - ✅ Setup Fuse template (React + MUI + TypeScript)
@@ -425,10 +443,12 @@ api/                          → un archivo por módulo (TypeScript)
 - ✅ Almacenes — CRUD maestro-detalle split view 30/70 (almacenes + sub-almacenes con sigla)
 - ✅ Compras — Split view 40/60, filtro sub-almacén agrupado, CRUD cabecera+items, número auto al concluir
 - ✅ API almacenes.ts + compras.ts + materiales.ts
+- ✅ Solicitudes — Split view 40/60, filtros almacén+estado, 6 acciones por rol, crear con búsqueda de materiales
+- ✅ API solicitudes.ts + perfil.ts
+- 🟡 Perfil — formulario single-select sub-almacén + aprobador. Pendiente: aprobadores desde servicio externo
 - 🟡 Dashboard — placeholder (solo título, sin KPIs)
 - [ ] Materiales (página + API)
 - [ ] Movimientos (página + API)
-- [ ] Solicitudes (vistas por rol + API)
 - [ ] Reportes (5 reportes + API)
 - [ ] Dashboard KPIs
 
@@ -454,3 +474,5 @@ api/                          → un archivo por módulo (TypeScript)
 18. Filtro sub-almacén en compras usa ListSubheader de MUI para agrupar por almacén
 19. GET /api/almacenes/asignados devuelve almacenes+sub-almacenes anidados según rol (admin=todos, almacenero=asignados)
 20. Compras: numero nullable, se genera al concluir con formato SIGLA-YYYY-NNNNNN usando secuencia_ingresos del sub-almacén
+21. UserMenu: se agregó opción "Perfil" en el dropdown del avatar (ícono user-cog), junto a "Cerrar Sesión"
+22. Perfil: persona_id viene del JWT (sub claim), sub_almacen_id es single-select agrupado por almacén, aprobador_id de la tabla users local (pendiente migrar a servicio externo)

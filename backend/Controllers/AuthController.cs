@@ -99,13 +99,14 @@ public class AuthController : ControllerBase
         }
         catch { /* BD no disponible — rol por defecto "solicitante" */ }
 
-        // 4. Generar JWT con nombre y foto en los claims
+        // 4. Generar JWT con nombre, foto y ci en los claims
         var token = _jwt.GenerateToken(
             usuarioExt.Id,
             usuarioExt.Username,
             role,
             usuarioExt.Persona?.Nombres,
-            usuarioExt.Persona?.Fotografia);
+            usuarioExt.Persona?.Fotografia,
+            usuarioExt.Persona?.Ci);
 
         // 5. Registrar sesión (opcional)
         try
@@ -179,7 +180,13 @@ public class AuthController : ControllerBase
             "SELECT admin FROM almacen_encargado WHERE user_id = @uid AND active = true LIMIT 1",
             new { uid = userId });
         var role = esAdmin.HasValue ? (esAdmin.Value ? "admin" : "almacenero") : "solicitante";
-        var token = _jwt.GenerateToken(userId, username, role);
+
+        // Preservar claims adicionales del token actual
+        var nombre = User.FindFirst("nombre")?.Value;
+        var foto   = User.FindFirst("foto")?.Value;
+        var ci     = User.FindFirst("ci")?.Value;
+
+        var token = _jwt.GenerateToken(userId, username, role, nombre, foto, ci);
 
         return Ok(new
         {

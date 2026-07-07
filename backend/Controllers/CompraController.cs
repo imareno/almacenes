@@ -176,7 +176,7 @@ public class CompraController : ControllerBase
         try
         {
             var compra = await conn.QuerySingleOrDefaultAsync<CompraConSubAlmacen>(
-                "SELECT id, estado, sub_almacen_id, fecha FROM compras WHERE id = @id AND active = true",
+                "SELECT id, estado, sub_almacen_id FROM compras WHERE id = @id AND active = true",
                 new { id }, tx);
 
             if (compra is null) return NotFound(new { error = "Compra no encontrada" });
@@ -189,30 +189,20 @@ public class CompraController : ControllerBase
             if (tieneItems == 0)
                 return BadRequest(new { error = "No se puede concluir una compra sin ítems" });
 
-            // Lock sub_almacen para evitar concurrencia
-            var sa = await conn.QuerySingleAsync<(string? sigla, int secuencia_ingresos)>(
-                "SELECT sigla, secuencia_ingresos FROM sub_almacenes WHERE id = @id FOR UPDATE",
+            // Incrementar secuencia_ingresos y generar número
+            var sigla = await conn.ExecuteScalarAsync<string?>(
+                "SELECT sigla FROM sub_almacenes WHERE id = @id",
                 new { id = compra.SubAlmacenId }, tx);
 
-            var sigla = string.IsNullOrWhiteSpace(sa.sigla) ? "C" : sa.sigla;
-            var gestion = compra.Fecha.Year;
-            var prefix = $"ING-{sigla}-{gestion}-";
-
-            // Calcular siguiente secuencia para esta gestion
-            var seqNum = await conn.ExecuteScalarAsync<int>(
-                @"SELECT COALESCE(MAX(CAST(NULLIF(SUBSTRING(numero FROM LENGTH(@prefix) + 1), '') AS INTEGER)), 0) + 1
-                  FROM compras
-                  WHERE sub_almacen_id = @subAlmacenId
-                    AND numero LIKE @prefix || '%'
-                    AND active = true",
-                new { subAlmacenId = compra.SubAlmacenId, prefix }, tx);
-
-            // Actualizar secuencia_ingresos (mantener contador general como respaldo)
-            await conn.ExecuteAsync(
-                "UPDATE sub_almacenes SET secuencia_ingresos = secuencia_ingresos + 1 WHERE id = @id",
+            var secuencia = await conn.ExecuteScalarAsync<int>(
+                @"UPDATE sub_almacenes
+                  SET secuencia_ingresos = secuencia_ingresos + 1
+                  WHERE id = @id
+                  RETURNING secuencia_ingresos",
                 new { id = compra.SubAlmacenId }, tx);
 
-            var numero = $"{prefix}{seqNum:D6}";
+            var prefijo = string.IsNullOrWhiteSpace(sigla) ? "C" : sigla;
+            var numero = $"{prefijo}-{DateTime.Now:yyyy}-{secuencia:D6}";
 
             await conn.ExecuteAsync(
                 "UPDATE compras SET estado = 'concluido', numero = @numero WHERE id = @id",
@@ -386,7 +376,7 @@ public class CompraController : ControllerBase
     private record CompraItemRow(int Id, int MaterialId, string Codigo, string MaterialNombre,
                                  string UnidadMedida, decimal Cantidad, decimal PrecioUnitario, decimal Subtotal);
 
-    private record CompraConSubAlmacen(int Id, string Estado, int SubAlmacenId, DateOnly Fecha);
+    private record CompraConSubAlmacen(int Id, string Estado, int SubAlmacenId);
     private record EstadoRow(int Id, string Estado);
 }
 
