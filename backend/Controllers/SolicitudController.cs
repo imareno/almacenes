@@ -132,61 +132,61 @@ public class SolicitudController : ControllerBase
     [Authorize(Roles = "admin,solicitante")]
     public async Task<IActionResult> Create([FromBody] SolicitudCreateRequest req)
     {
-        if (req.Items is null || req.Items.Count == 0)
-            return BadRequest(new { error = "La solicitud debe tener al menos un ítem" });
-
         using var conn = _db.CreateConnection();
-        conn.Open();
-        using var tx = conn.BeginTransaction();
 
-        try
+        var subExiste = await conn.ExecuteScalarAsync<int?>(
+            "SELECT id FROM sub_almacenes WHERE id = @id AND active = true",
+            new { id = req.SubAlmacenId });
+
+        if (subExiste is null)
+            return BadRequest(new { error = "Sub-almacén no encontrado o inactivo" });
+
+        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+
+        var solId = await conn.ExecuteScalarAsync<int>(
+            @"INSERT INTO solicitudes (numero, solicitante_id, sub_almacen_id, observacion)
+              VALUES ('TEMP', @userId, @subAlmacenId, @obs)
+              RETURNING id",
+            new { userId, subAlmacenId = req.SubAlmacenId, obs = req.Observacion?.Trim() });
+
+        var numero = $"SOL-{DateTime.UtcNow:yyyy}-{solId:D6}";
+        await conn.ExecuteAsync(
+            "UPDATE solicitudes SET numero = @numero WHERE id = @id",
+            new { numero, id = solId });
+
+        if (req.Items is not null && req.Items.Count > 0)
         {
-            var subExiste = await conn.ExecuteScalarAsync<int?>(
-                "SELECT id FROM sub_almacenes WHERE id = @id AND active = true",
-                new { id = req.SubAlmacenId }, tx);
-
-            if (subExiste is null)
-                return BadRequest(new { error = "Sub-almacén no encontrado o inactivo" });
-
-            var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-
-            var solId = await conn.ExecuteScalarAsync<int>(
-                @"INSERT INTO solicitudes (numero, solicitante_id, sub_almacen_id, observacion)
-                  VALUES ('TEMP', @userId, @subAlmacenId, @obs)
-                  RETURNING id",
-                new { userId, subAlmacenId = req.SubAlmacenId, obs = req.Observacion?.Trim() }, tx);
-
-            var numero = $"SOL-{DateTime.UtcNow:yyyy}-{solId:D6}";
-            await conn.ExecuteAsync(
-                "UPDATE solicitudes SET numero = @numero WHERE id = @id",
-                new { numero, id = solId }, tx);
-
-            foreach (var item in req.Items)
+            conn.Open();
+            using var tx = conn.BeginTransaction();
+            try
             {
-                if (item.Cantidad <= 0)
-                    return BadRequest(new { error = "La cantidad solicitada debe ser mayor a cero" });
+                foreach (var item in req.Items)
+                {
+                    if (item.Cantidad <= 0)
+                        return BadRequest(new { error = "La cantidad solicitada debe ser mayor a cero" });
 
-                var matExiste = await conn.ExecuteScalarAsync<int?>(
-                    "SELECT id FROM materiales WHERE id = @id AND active = true",
-                    new { id = item.MaterialId }, tx);
+                    var matExiste = await conn.ExecuteScalarAsync<int?>(
+                        "SELECT id FROM materiales WHERE id = @id AND active = true",
+                        new { id = item.MaterialId }, tx);
 
-                if (matExiste is null)
-                    return BadRequest(new { error = $"Material {item.MaterialId} no encontrado o inactivo" });
+                    if (matExiste is null)
+                        return BadRequest(new { error = $"Material {item.MaterialId} no encontrado o inactivo" });
 
-                await conn.ExecuteAsync(
-                    @"INSERT INTO solicitud_items (solicitud_id, material_id, cantidad_solicitada)
-                      VALUES (@solId, @materialId, @cantidad)",
-                    new { solId, materialId = item.MaterialId, cantidad = item.Cantidad }, tx);
+                    await conn.ExecuteAsync(
+                        @"INSERT INTO solicitud_items (solicitud_id, material_id, cantidad_solicitada)
+                          VALUES (@solId, @materialId, @cantidad)",
+                        new { solId, materialId = item.MaterialId, cantidad = item.Cantidad }, tx);
+                }
+                tx.Commit();
             }
+            catch
+            {
+                tx.Rollback();
+                throw;
+            }
+        }
 
-            tx.Commit();
-            return CreatedAtAction(nameof(GetById), new { id = solId }, new { id = solId, numero });
-        }
-        catch
-        {
-            tx.Rollback();
-            throw;
-        }
+        return CreatedAtAction(nameof(GetById), new { id = solId }, new { id = solId, numero });
     }
 
     // PUT /api/solicitudes/{id}/aprobar
@@ -421,6 +421,96 @@ public class SolicitudController : ControllerBase
         return NoContent();
     }
 
+    // ─── SOLICITUD ITEMS ─────────────────────────────────────────────────────
+
+    // POST /api/solicitudes/{id}/items
+    [HttpPost("{id:int}/items")]
+    [Authorize(Roles = "admin,solicitante")]
+    public async Task<IActionResult> AddItem(int id, [FromBody] SolicitudItemUpsertRequest req)
+    {
+        if (req.Cantidad <= 0)
+            return BadRequest(new { error = "La cantidad debe ser mayor a cero" });
+
+        using var conn = _db.CreateConnection();
+
+        var sol = await conn.QuerySingleOrDefaultAsync<SolEstado>(
+            "SELECT id, estado FROM solicitudes WHERE id = @id AND active = true", new { id });
+
+        if (sol is null) return NotFound(new { error = "Solicitud no encontrada" });
+        if (sol.Estado != "pendiente")
+            return BadRequest(new { error = "Solo se pueden agregar ítems a una solicitud en estado pendiente" });
+
+        var materialExiste = await conn.ExecuteScalarAsync<int?>(
+            "SELECT id FROM materiales WHERE id = @id AND active = true",
+            new { id = req.MaterialId });
+
+        if (materialExiste is null)
+            return BadRequest(new { error = "Material no encontrado o inactivo" });
+
+        var itemId = await conn.ExecuteScalarAsync<int>(
+            @"INSERT INTO solicitud_items (solicitud_id, material_id, cantidad_solicitada)
+              VALUES (@solId, @materialId, @cantidad)
+              RETURNING id",
+            new { solId = id, materialId = req.MaterialId, cantidad = req.Cantidad });
+
+        return Created($"/api/solicitudes/{id}/items/{itemId}", new { id = itemId });
+    }
+
+    // PUT /api/solicitudes/{id}/items/{itemId}
+    [HttpPut("{id:int}/items/{itemId:int}")]
+    [Authorize(Roles = "admin,solicitante")]
+    public async Task<IActionResult> UpdateItem(int id, int itemId, [FromBody] SolicitudItemUpsertRequest req)
+    {
+        if (req.Cantidad <= 0)
+            return BadRequest(new { error = "La cantidad debe ser mayor a cero" });
+
+        using var conn = _db.CreateConnection();
+
+        var sol = await conn.QuerySingleOrDefaultAsync<SolEstado>(
+            "SELECT id, estado FROM solicitudes WHERE id = @id AND active = true", new { id });
+
+        if (sol is null) return NotFound(new { error = "Solicitud no encontrada" });
+        if (sol.Estado != "pendiente")
+            return BadRequest(new { error = "Solo se pueden editar ítems de una solicitud en estado pendiente" });
+
+        var existe = await conn.ExecuteScalarAsync<int?>(
+            "SELECT id FROM solicitud_items WHERE id = @itemId AND solicitud_id = @id",
+            new { id, itemId });
+
+        if (existe is null) return NotFound(new { error = "Ítem no encontrado" });
+
+        await conn.ExecuteAsync(
+            @"UPDATE solicitud_items
+              SET material_id = @materialId, cantidad_solicitada = @cantidad
+              WHERE id = @itemId",
+            new { materialId = req.MaterialId, cantidad = req.Cantidad, itemId });
+
+        return NoContent();
+    }
+
+    // DELETE /api/solicitudes/{id}/items/{itemId}
+    [HttpDelete("{id:int}/items/{itemId:int}")]
+    [Authorize(Roles = "admin,solicitante")]
+    public async Task<IActionResult> DeleteItem(int id, int itemId)
+    {
+        using var conn = _db.CreateConnection();
+
+        var sol = await conn.QuerySingleOrDefaultAsync<SolEstado>(
+            "SELECT id, estado FROM solicitudes WHERE id = @id AND active = true", new { id });
+
+        if (sol is null) return NotFound(new { error = "Solicitud no encontrada" });
+        if (sol.Estado != "pendiente")
+            return BadRequest(new { error = "Solo se pueden eliminar ítems de una solicitud en estado pendiente" });
+
+        var deleted = await conn.ExecuteAsync(
+            "DELETE FROM solicitud_items WHERE id = @itemId AND solicitud_id = @id",
+            new { id, itemId });
+
+        if (deleted == 0) return NotFound(new { error = "Ítem no encontrado" });
+
+        return NoContent();
+    }
+
     // ── Tipos internos ────────────────────────────────────────
     private record SolicitudRow(
         int Id, string Numero, string Estado,
@@ -445,7 +535,8 @@ public class SolicitudController : ControllerBase
 
 // ── Request DTOs ──────────────────────────────────────────────
 public record SolicitudItemRequest(int MaterialId, decimal Cantidad);
-public record SolicitudCreateRequest(int SubAlmacenId, List<SolicitudItemRequest> Items, string? Observacion = null);
+public record SolicitudCreateRequest(int SubAlmacenId, List<SolicitudItemRequest>? Items = null, string? Observacion = null);
+public record SolicitudItemUpsertRequest(int MaterialId, decimal Cantidad);
 public record ObservacionRequest(string? Observacion);
 public record DespachoItemRequest(int SolicitudItemId, decimal CantidadDespachada);
 public record DespachoRequest(DateOnly Fecha, List<DespachoItemRequest> Items);

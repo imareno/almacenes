@@ -73,7 +73,12 @@
         compras/             → ✅ CRUD con paginación servidor, filtros, flujo estados
         dashboard/           → placeholder (solo título)
         example/             → demo del template (no borrar por ahora)
-        solicitudes/         → ✅ Split view 40/60, filtros almacén+estado, 6 acciones por rol
+         solicitudes/         → ✅ Route lazy, SolicitudesPage + 6 dialogs en subdir dialogs/
+                              Split view 40/60, header con PageBreadcrumb + motion,
+                              FuseSvgIcon lucide, chips filled con iconos,
+                              badge perfil estilo OrdersStatus (Tailwind bg-color-50 text-color-700),
+                              Skeleton loaders, botón "Nueva Solicitud" con Tooltip disabled,
+                              canCreate() solo valida perfil (todos los roles pueden crear)
         perfil/              → 🟡 formulario single-select sub-almacén + aprobador, PUT guarda todo
     configs/
       settingsConfig.ts      → layout1 fullwidth, footer off, tema legacy/defaultDark, roles, redirect /dashboard
@@ -204,10 +209,11 @@ SOLICITANTE puede cancelar (si estado = "pendiente")
 
 ## Reglas del flujo
 
-- Solo el solicitante puede crear/cancelar sus solicitudes (estado "pendiente")
-- Solo el aprobador puede aprobar o rechazar (estado "pendiente")
-- Solo el almacenero puede despachar (estado "aprobada")
-- Solo el almacenero puede confirmar entrega (estado "despachada")
+- Cualquier usuario con perfil configurado puede crear solicitudes (estado "pendiente")
+- Solo el solicitante dueño (o admin) puede cancelar (estado "pendiente")
+- Solo el aprobador (o admin) puede aprobar o rechazar (estado "pendiente")
+- Solo el almacenero (o admin) puede despachar (estado "aprobada")
+- Solo el almacenero (o admin) puede confirmar entrega (estado "despachada")
 - El movimiento de salida se genera al DESPACHAR, no al entregar
 - Admin puede ejecutar cualquier acción
 
@@ -291,7 +297,7 @@ GROUP BY material_id, almacen_id
 ### Solicitudes
 - GET    /api/solicitudes                    → filtros estado/almacen/solicitante (rol-aware)
 - GET    /api/solicitudes/{id}
-- POST   /api/solicitudes                    → solicitante/admin
+- POST   /api/solicitudes                    → cualquier rol con perfil configurado (admin siempre puede)
 - PUT    /api/solicitudes/{id}/aprobar       → aprobador/admin
 - PUT    /api/solicitudes/{id}/rechazar      → aprobador/admin
 - PUT    /api/solicitudes/{id}/despachar     → almacenero/admin + PEPS
@@ -331,7 +337,7 @@ GROUP BY material_id, almacen_id
 ### Páginas construidas
 - /almacenes              → ✅ CRUD maestro-detalle split view 30/70 (almacenes + sub-almacenes)
 - /compras                → ✅ Split view 40/60: lista compras + detalle items. Filtro por sub-almacén (agrupado por almacén). CRUD cabecera + CRUD items. Número auto-generado al concluir. Autocomplete materiales.
-- /solicitudes            → ✅ Split view 40/60: lista solicitudes + detalle items. Filtros almacén+estado. 6 acciones según rol+estado (aprobar, rechazar, despachar, entregar, cancelar). Crear con búsqueda de materiales.
+- /solicitudes            → ✅ Split view 40/60: lista solicitudes + detalle items. 6 acciones según rol+estado (aprobar, rechazar, despachar, entregar, cancelar). Crear con búsqueda de materiales. Header con PageBreadcrumb + animaciones motion. Badge de perfil estilo OrdersStatus (Tailwind). Skeleton loaders. Diálogos extraídos en `dialogs/`. FuseSvgIcon lucide en todos los iconos. canCreate() solo valida perfil (cualquier rol puede crear).
 - /perfil                 → 🟡 Formulario single-select sub-almacén (agrupado por almacén) + aprobador. PUT guarda todo. Pendiente: obtener aprobadores de servicio externo.
 - /dashboard              → placeholder (solo título, sin KPIs)
 
@@ -354,7 +360,7 @@ app/(control-panel)/
   dashboard/                  → route.tsx + DashboardPage.tsx (placeholder)
   materiales/                 → POR CREAR
   movimientos/                → POR CREAR
-  solicitudes/                → ✅ route.tsx + SolicitudesPage.tsx (split view + acciones)
+   solicitudes/                → ✅ route.tsx + SolicitudesPage.tsx + dialogs/ (6 componentes)
   perfil/                     → 🟡 route.tsx + PerfilPage.tsx (single-select form)
   reportes/
     existencias/              → POR CREAR
@@ -387,11 +393,17 @@ api/                          → un archivo por módulo (TypeScript)
 ### Convenciones frontend
 - Rutas siguen la convención Fuse: `app/(control-panel)/<nombre>/route.tsx`
 - Página principal como archivo único `<Modulo>Page.tsx` (no subdirectorio components/ salvo que crezca mucho)
+- Diálogos complejos se extraen a `dialogs/` cuando la página supera ~500 líneas
 - Los archivos `api/*.ts` solo hacen llamadas HTTP con `ky` y tipan la respuesta
 - No duplicar validaciones del backend en el frontend
 - Manejo de errores ky: `err.response?.json()` → mostrar `body.error` (ky lanza HTTPError con .response)
 - Vite proxy: `/api` → `http://localhost:5252` (no usar VITE_API_BASE_URL, el proxy ya resuelve)
 - Rutas se auto-registran por glob en routesConfig.tsx (no necesitan import manual)
+- **Iconos:** usar `FuseSvgIcon` con `lucide:*` (NO `@mui/icons-material`)
+- **Header:** usar `PageBreadcrumb` + `motion/react` para animaciones de título (patrón Demo Contacts)
+- **Loaders:** usar `Skeleton` de MUI (NO texto "Cargando...")
+- **Badges de estado:** usar Tailwind `bg-{color}-50 text-{color}-700 rounded px-2 py-1 text-sm font-medium` (patrón `OrdersStatus` del Demo)
+- **Botones de acción:** `variant="contained"` con `startIcon` de lucide. Si puede estar disabled, envolver en `<Tooltip title="..."><span><Button .../></span></Tooltip>` (patrón ComprasPage)
 
 ## Convenciones generales
 
@@ -431,7 +443,7 @@ api/                          → un archivo por módulo (TypeScript)
 - ✅ MaterialController
 - ✅ CompraController (CRUD + flujo pendiente→concluido, depende de sub_almacen_id)
 - ✅ MovimientoController + PepsHelper
-- ✅ SolicitudController (flujo completo 5 acciones, depende de almacen_id)
+- ✅ SolicitudController (flujo completo, POST permite cualquier rol con perfil, depende de sub_almacen_id)
 - ✅ ReporteController
 - ✅ PerfilController (GET perfil, PUT perfil, GET sub-almacenes, GET usuarios)
 
@@ -443,7 +455,7 @@ api/                          → un archivo por módulo (TypeScript)
 - ✅ Almacenes — CRUD maestro-detalle split view 30/70 (almacenes + sub-almacenes con sigla)
 - ✅ Compras — Split view 40/60, filtro sub-almacén agrupado, CRUD cabecera+items, número auto al concluir
 - ✅ API almacenes.ts + compras.ts + materiales.ts
-- ✅ Solicitudes — Split view 40/60, filtros almacén+estado, 6 acciones por rol, crear con búsqueda de materiales
+- ✅ Solicitudes — Split view 40/60, filtro estado, 6 acciones por rol, crear con búsqueda de materiales. Header con PageBreadcrumb + motion. Badges perfil Tailwind. Skeleton loaders. 6 diálogos extraídos en dialogs/. FuseSvgIcon lucide. Botón crear con Tooltip (patrón Compras). canCreate solo valida perfil.
 - ✅ API solicitudes.ts + perfil.ts
 - 🟡 Perfil — formulario single-select sub-almacén + aprobador. Pendiente: aprobadores desde servicio externo
 - 🟡 Dashboard — placeholder (solo título, sin KPIs)

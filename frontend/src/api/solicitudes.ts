@@ -72,12 +72,28 @@ export interface SolicitudItemInput {
 
 export interface SolicitudCreateInput {
 	subAlmacenId: number;
-	items: SolicitudItemInput[];
+	items?: SolicitudItemInput[];
 	observacion?: string;
 }
 
 export const createSolicitud = (data: SolicitudCreateInput): Promise<{ id: number; numero: string }> =>
 	api.post('solicitudes', { json: data }).json<{ id: number; numero: string }>();
+
+// ─── Solicitud Items ───────────────────────────────────────────────────────────
+
+export interface SolicitudItemUpsertInput {
+	materialId: number;
+	cantidad: number;
+}
+
+export const addSolicitudItem = (solicitudId: number, data: SolicitudItemUpsertInput): Promise<{ id: number }> =>
+	api.post(`solicitudes/${solicitudId}/items`, { json: data }).json<{ id: number }>();
+
+export const updateSolicitudItem = (solicitudId: number, id: number, data: SolicitudItemUpsertInput): Promise<void> =>
+	api.put(`solicitudes/${solicitudId}/items/${id}`, { json: data }).then(() => undefined);
+
+export const deleteSolicitudItem = (solicitudId: number, id: number): Promise<void> =>
+	api.delete(`solicitudes/${solicitudId}/items/${id}`).then(() => undefined);
 
 // ─── Acciones ─────────────────────────────────────────────────────────────────
 
