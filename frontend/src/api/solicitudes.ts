@@ -8,6 +8,9 @@ export interface SolicitudListItem {
 	estado: string;
 	solicitanteId: number;
 	solicitante: string;
+	subAlmacenId: number;
+	subAlmacenNombre: string;
+	sigla?: string;
 	almacenId: number;
 	almacenNombre: string;
 	aprobadorId?: number;
@@ -22,25 +25,8 @@ export interface SolicitudListItem {
 	createdAt: string;
 }
 
-export interface SolicitudDetail {
-	id: number;
-	numero: string;
-	estado: string;
-	solicitanteId: number;
-	solicitante: string;
-	almacenId: number;
-	almacenNombre: string;
-	aprobadorId?: number;
-	aprobador?: string;
-	almaceneroId?: number;
-	almacenero?: string;
-	fechaSolicitud: string;
-	fechaAprobacion?: string;
-	fechaDespacho?: string;
-	fechaEntrega?: string;
-	observacion?: string;
-	createdAt: string;
-}
+// SolicitudDetail es igual a SolicitudListItem
+export type SolicitudDetail = SolicitudListItem;
 
 export interface SolicitudItem {
 	id: number;
@@ -62,14 +48,12 @@ interface PaginatedResponse {
 
 export const getSolicitudes = (params?: {
 	estado?: string;
-	almacenId?: number;
 	solicitanteId?: number;
 	page?: number;
 	pageSize?: number;
 }): Promise<PaginatedResponse> => {
 	const sp: Record<string, string | number> = {};
 	if (params?.estado) sp.estado = params.estado;
-	if (params?.almacenId != null) sp.almacenId = params.almacenId;
 	if (params?.solicitanteId != null) sp.solicitanteId = params.solicitanteId;
 	if (params?.page != null) sp.page = params.page;
 	if (params?.pageSize != null) sp.pageSize = params.pageSize;
@@ -87,7 +71,7 @@ export interface SolicitudItemInput {
 }
 
 export interface SolicitudCreateInput {
-	almacenId: number;
+	subAlmacenId: number;
 	items: SolicitudItemInput[];
 	observacion?: string;
 }

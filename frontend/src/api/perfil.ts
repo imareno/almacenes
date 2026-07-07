@@ -4,13 +4,13 @@ export interface PerfilItem {
 	id: number;
 	personaId: number;
 	subAlmacenId: number;
-	aprobadorId: number;
+	aprobadorId: string;
+	aprobadorNombre?: string;
+	aprobadorCargo?: string;
 	subAlmacenNombre: string;
 	sigla?: string;
 	almacenId: number;
 	almacenNombre: string;
-	aprobadorNombre: string;
-	aprobadorRole: string;
 }
 
 export interface SubAlmacenPerfil {
@@ -21,15 +21,23 @@ export interface SubAlmacenPerfil {
 	almacenNombre: string;
 }
 
-export interface Usuario {
-	id: number;
-	username: string;
-	role: string;
-}
-
 export interface PerfilSaveInput {
 	subAlmacenIds: number[];
-	aprobadorId: number;
+	aprobadorId: string;
+	aprobadorNombre?: string;
+	aprobadorCargo?: string;
+}
+
+export interface Aprobador {
+	ci: string;
+	nombreCompleto: string;
+	relacionLaboral: number;
+	cargoId: number;
+	cargo: string;
+	areaOrganizacionalId: number;
+	areaOrganizacional: string;
+	email?: string;
+	username?: string;
 }
 
 export const getMyPerfil = (): Promise<{ items: PerfilItem[] }> =>
@@ -41,5 +49,5 @@ export const getSubAlmacenesPerfil = (): Promise<{ items: SubAlmacenPerfil[] }> 
 export const savePerfil = (data: PerfilSaveInput): Promise<void> =>
 	api.put('perfil', { json: data }).then(() => undefined);
 
-export const getUsuarios = (): Promise<{ items: Usuario[] }> =>
-	api.get('perfil/usuarios').json<{ items: Usuario[] }>();
+export const getAprobadores = (): Promise<{ items: Aprobador[] }> =>
+	api.get('perfil/aprobadores').json<{ items: Aprobador[] }>();

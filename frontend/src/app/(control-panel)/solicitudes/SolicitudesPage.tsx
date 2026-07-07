@@ -48,8 +48,9 @@ import {
 	DespachoItemInput,
 	EntregaItemInput
 } from '../../../api/solicitudes';
-import { Almacen, AlmacenAsignado, getAlmacenesAsignados, getAlmacenes } from '../../../api/almacenes';
+import { AlmacenAsignado, getAlmacenesAsignados } from '../../../api/almacenes';
 import { getMateriales, Material } from '../../../api/materiales';
+import { getMyPerfil } from '../../../api/perfil';
 import useUser from '@auth/useUser';
 
 // ─── constantes ──────────────────────────────────────────────────────────────
@@ -105,12 +106,11 @@ export default function SolicitudesPage() {
 
 	// ─── state ────────────────────────────────────────────────────────────────
 	const [filtroEstado, setFiltroEstado] = useState('');
-	const [filtroAlmacenId, setFiltroAlmacenId] = useState<number | ''>('');
 	const [selectedId, setSelectedId] = useState<number | null>(null);
 
 	// crear
 	const [createOpen, setCreateOpen] = useState(false);
-	const [createAlmacenId, setCreateAlmacenId] = useState<number | ''>('');
+	const [createSubAlmacenId, setCreateSubAlmacenId] = useState<number | ''>('');
 	const [createObservacion, setCreateObservacion] = useState('');
 	const [createErrors, setCreateErrors] = useState<Record<string, string>>({});
 	const [createItemMatId, setCreateItemMatId] = useState<number | ''>('');
@@ -147,17 +147,17 @@ export default function SolicitudesPage() {
 		queryFn: getAlmacenesAsignados
 	});
 
-	const { data: todosAlmacenes = [] } = useQuery({
-		queryKey: ['almacenes'],
-		queryFn: () => getAlmacenes(true)
+	const { data: perfilData } = useQuery({
+		queryKey: ['perfil'],
+		queryFn: getMyPerfil
 	});
-	const almacenesParaFiltro: { id: number; nombre: string }[] = isAdmin ? todosAlmacenes : almacenesAsignados;
+	const perfilItems = perfilData?.items ?? [];
+	const perfilItem = perfilItems.length > 0 ? perfilItems[0] : null;
 
 	const { data: solicitudesData, isLoading: loadingList } = useQuery({
-		queryKey: ['solicitudes', filtroEstado, filtroAlmacenId],
+		queryKey: ['solicitudes', filtroEstado],
 		queryFn: () => getSolicitudes({
 			estado: filtroEstado || undefined,
-			almacenId: filtroAlmacenId || undefined,
 			pageSize: 100
 		})
 	});
@@ -173,9 +173,9 @@ export default function SolicitudesPage() {
 
 	const matSearchReady = matSearch.trim().length >= 4;
 	const { data: materialesData } = useQuery({
-		queryKey: ['materiales-sol', createAlmacenId, matSearch.trim()],
-		queryFn: () => getMateriales({ almacenId: createAlmacenId as number, buscar: matSearch.trim(), soloActivos: true, pageSize: 1000 }),
-		enabled: createAlmacenId !== '' && matSearchReady
+		queryKey: ['materiales-sol', matSearch.trim()],
+		queryFn: () => getMateriales({ buscar: matSearch.trim(), soloActivos: true, pageSize: 1000 }),
+		enabled: matSearchReady
 	});
 	const materiales = materialesData?.items ?? [];
 
@@ -260,7 +260,7 @@ export default function SolicitudesPage() {
 		return sol.solicitanteId === Number(userId);
 	}
 
-	function canCreate() { return isAdmin || isSolicitante; }
+	function canCreate() { return (isAdmin || isSolicitante) && perfilItem !== null; }
 	function canAprobarRechazar(sol: SolicitudDetail | null) {
 		return sol && (isAdmin || isAprobador) && sol.estado === 'pendiente';
 	}
@@ -277,7 +277,7 @@ export default function SolicitudesPage() {
 	// ─── handlers ─────────────────────────────────────────────────────────────
 
 	function openCreate() {
-		setCreateAlmacenId('');
+		setCreateSubAlmacenId(perfilItem?.subAlmacenId ?? '');
 		setCreateObservacion('');
 		setCreateItems([]);
 		setCreateErrors({});
@@ -289,7 +289,7 @@ export default function SolicitudesPage() {
 
 	function addCreateItem() {
 		const next: Record<string, string> = {};
-		if (createAlmacenId === '') next.almacen = 'Seleccione un almacén';
+		if (createSubAlmacenId === '') next.subAlmacen = 'Seleccione un sub-almacén';
 		if (createItemMatId === '') next.material = 'Seleccione un material';
 		if (!createItemCant || Number(createItemCant) <= 0) next.cantidad = 'Debe ser mayor a 0';
 		setCreateErrors(next);
@@ -316,8 +316,8 @@ export default function SolicitudesPage() {
 	}
 
 	function submitCreate() {
-		if (createAlmacenId === '') {
-			setCreateErrors({ almacen: 'Requerido' });
+		if (createSubAlmacenId === '') {
+			setCreateErrors({ subAlmacen: 'Requerido' });
 			return;
 		}
 		if (createItems.length === 0) {
@@ -325,7 +325,7 @@ export default function SolicitudesPage() {
 			return;
 		}
 		createMut.mutate({
-			almacenId: createAlmacenId as number,
+			subAlmacenId: createSubAlmacenId as number,
 			items: createItems.map(i => ({ materialId: i.materialId, cantidad: i.cantidad })),
 			observacion: createObservacion.trim() || undefined
 		});
@@ -423,16 +423,20 @@ export default function SolicitudesPage() {
 				<Box sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column', gap: 2 }}>
 					{/* Filtros */}
 					<Stack direction="row" spacing={2} alignItems="center">
-						<TextField
-							select label="Almacén" value={filtroAlmacenId}
-							onChange={(e) => { setFiltroAlmacenId(e.target.value === '' ? '' : Number(e.target.value)); setSelectedId(null); }}
-							size="small" sx={{ width: 280 }}
-						>
-							<MenuItem value=""><em>Todos</em></MenuItem>
-							{almacenesParaFiltro.map(a => (
-								<MenuItem key={a.id} value={a.id}>{a.nombre}</MenuItem>
-							))}
-						</TextField>
+						{perfilItem ? (
+							<Paper variant="outlined" sx={{ px: 2, py: 0.75, bgcolor: 'action.hover' }}>
+								<Typography variant="body2">
+									<strong>{perfilItem.sigla ? `${perfilItem.sigla} — ` : ''}{perfilItem.subAlmacenNombre}</strong>
+									<Typography component="span" variant="body2" color="text.secondary"> ({perfilItem.almacenNombre})</Typography>
+								</Typography>
+							</Paper>
+						) : (
+							<Paper variant="outlined" sx={{ px: 2, py: 0.75, bgcolor: 'warning.light', borderColor: 'warning.main' }}>
+								<Typography variant="body2" color="warning.dark">
+									Perfil incompleto — configure su sub-almacen en la pagina de Perfil
+								</Typography>
+							</Paper>
+						)}
 						<TextField
 							select label="Estado" value={filtroEstado}
 							onChange={(e) => setFiltroEstado(e.target.value)}
@@ -452,11 +456,16 @@ export default function SolicitudesPage() {
 						<Paper variant="outlined" sx={{ flex: '0 0 40%', minWidth: 280, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 							<Box sx={{ p: 2, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
 								<Typography variant="subtitle1" fontWeight={600}>Solicitudes</Typography>
-								{canCreate() && (
-									<Button variant="contained" size="small" startIcon={<AddIcon />} onClick={openCreate}>
-										Nueva Solicitud
-									</Button>
-								)}
+								<Stack direction="row" spacing={1} alignItems="center">
+									{(isAdmin || isSolicitante) && !perfilItem && (
+										<Typography variant="caption" color="text.secondary">Configure su perfil para crear solicitudes</Typography>
+									)}
+									{canCreate() && (
+										<Button variant="contained" size="small" startIcon={<AddIcon />} onClick={openCreate}>
+											Nueva Solicitud
+										</Button>
+									)}
+								</Stack>
 							</Box>
 							<Divider />
 							<List sx={{ flex: 1, overflow: 'auto', py: 0 }}>
@@ -473,7 +482,7 @@ export default function SolicitudesPage() {
 											}
 											secondary={
 												<>
-													{s.almacenNombre} — {s.solicitante} — {new Date(s.fechaSolicitud).toLocaleDateString('es-BO')}
+													{s.sigla ? `${s.sigla} — ` : ''}{s.subAlmacenNombre} — {s.solicitante} — {new Date(s.fechaSolicitud).toLocaleDateString('es-BO')}
 												</>
 											}
 											slotProps={{ secondary: { noWrap: true } }}
@@ -499,7 +508,7 @@ export default function SolicitudesPage() {
 												<Chip label={selectedSol.estado} color={estadoColor[selectedSol.estado] ?? 'default'} size="small" variant="outlined" sx={{ textTransform: 'capitalize' }} />
 											</Stack>
 											<Typography variant="body2" color="text.secondary">
-												{selectedSol.almacenNombre} — Solicitante: {selectedSol.solicitante}
+												{selectedSol.sigla ? `${selectedSol.sigla} — ` : ''}{selectedSol.subAlmacenNombre} ({selectedSol.almacenNombre}) — Solicitante: {selectedSol.solicitante}
 											</Typography>
 											<Stack direction="row" spacing={2} sx={{ mt: 0.5, flexWrap: 'wrap' }}>
 												<Typography variant="caption" color="text.secondary">
@@ -575,25 +584,40 @@ export default function SolicitudesPage() {
 						<DialogTitle>Nueva Solicitud</DialogTitle>
 						<DialogContent dividers>
 							<Stack spacing={2.5} sx={{ pt: 0.5 }}>
-								<TextField
-									select label="Almacén *" value={createAlmacenId}
-									onChange={(e) => {
-										setCreateAlmacenId(e.target.value === '' ? '' : Number(e.target.value));
-										setCreateItems([]);
-										setCreateItemMatId('');
-										setMatSearch('');
-										if (createErrors.almacen) setCreateErrors(p => ({ ...p, almacen: '' }));
-									}}
-									error={!!createErrors.almacen} helperText={createErrors.almacen}
-									fullWidth
-								>
-									<MenuItem value=""><em>Seleccione un almacén</em></MenuItem>
-									{almacenesAsignados.map(a => (
-										<MenuItem key={a.id} value={a.id}>{a.nombre}</MenuItem>
-									))}
-								</TextField>
+								{perfilItem ? (
+									<Paper variant="outlined" sx={{ p: 2, bgcolor: 'action.hover' }}>
+										<Stack spacing={0.5}>
+											<Typography variant="caption" color="text.secondary">Sub-almacén (según su perfil)</Typography>
+											<Typography variant="body1" fontWeight={600}>{perfilItem.sigla ? `${perfilItem.sigla} — ${perfilItem.subAlmacenNombre}` : perfilItem.subAlmacenNombre}</Typography>
+											<Typography variant="body2" color="text.secondary">{perfilItem.almacenNombre}</Typography>
+										</Stack>
+									</Paper>
+								) : (
+									<TextField
+										select label="Sub-almacén *" value={createSubAlmacenId}
+										onChange={(e) => {
+											setCreateSubAlmacenId(e.target.value === '' ? '' : Number(e.target.value));
+											setCreateItems([]);
+											setCreateItemMatId('');
+											setMatSearch('');
+											if (createErrors.subAlmacen) setCreateErrors(p => ({ ...p, subAlmacen: '' }));
+										}}
+										error={!!createErrors.subAlmacen} helperText={createErrors.subAlmacen}
+										fullWidth
+									>
+										<MenuItem value=""><em>Seleccione un sub-almacén</em></MenuItem>
+										{almacenesAsignados.flatMap((a) => [
+											<ListSubheader key={`h-${a.id}`}>{a.nombre}</ListSubheader>,
+											...a.subAlmacenes.map((s) => (
+												<MenuItem key={s.id} value={s.id}>
+													{s.sigla ? `${s.sigla} — ${s.nombre}` : s.nombre}
+												</MenuItem>
+											))
+										])}
+									</TextField>
+								)}
 
-								{createAlmacenId !== '' && (
+								{createSubAlmacenId !== '' && (
 									<>
 										<Paper variant="outlined" sx={{ p: 2 }}>
 											<Typography variant="subtitle2" fontWeight={600} sx={{ mb: 1.5 }}>Materiales solicitados</Typography>

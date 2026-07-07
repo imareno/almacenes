@@ -7,15 +7,12 @@ import {
 	Autocomplete,
 	Box,
 	Button,
-	Chip,
-	ChipProps,
-	MenuItem,
 	Paper,
 	Stack,
 	TextField,
 	Typography
 } from '@mui/material';
-import { getMyPerfil, getSubAlmacenesPerfil, getUsuarios, savePerfil, PerfilItem, SubAlmacenPerfil, PerfilSaveInput } from '../../../api/perfil';
+import { getMyPerfil, getSubAlmacenesPerfil, getAprobadores, savePerfil, PerfilItem, SubAlmacenPerfil, Aprobador, PerfilSaveInput } from '../../../api/perfil';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 
 const Root = styled(FusePageSimple)(({ theme }) => ({
@@ -39,21 +36,13 @@ function useApiError() {
 	};
 }
 
-const roleColor: Record<string, ChipProps['color']> = {
-	admin: 'error',
-	aprobador: 'success',
-	almacenero: 'primary',
-	solicitante: 'warning',
-	readonly: 'default'
-};
-
 export default function PerfilPage() {
 	const { enqueueSnackbar } = useSnackbar();
 	const queryClient = useQueryClient();
 	const handleApiError = useApiError();
 
 	const [selectedSub, setSelectedSub] = useState<SubAlmacenPerfil | null>(null);
-	const [aprobadorId, setAprobadorId] = useState<number | ''>('');
+	const [selectedAprobador, setSelectedAprobador] = useState<Aprobador | null>(null);
 
 	// ─── queries ──────────────────────────────────────────────────────────────
 
@@ -69,11 +58,11 @@ export default function PerfilPage() {
 	});
 	const subAlmacenes = subData?.items ?? [];
 
-	const { data: usuariosData } = useQuery({
-		queryKey: ['perfil-usuarios'],
-		queryFn: getUsuarios
+	const { data: aprobadoresData } = useQuery({
+		queryKey: ['perfil-aprobadores'],
+		queryFn: getAprobadores
 	});
-	const usuarios = usuariosData?.items ?? [];
+	const aprobadores = aprobadoresData?.items ?? [];
 
 	// ─── pre-select from existing perfil ──────────────────────────────────────
 
@@ -84,11 +73,12 @@ export default function PerfilPage() {
 			setSelectedSub(subsEnPerfil[0] ?? null);
 
 			const firstAprob = perfilItems[0]?.aprobadorId;
-			if (perfilItems.every(p => p.aprobadorId === firstAprob)) {
-				setAprobadorId(firstAprob);
+			if (firstAprob && aprobadores.length > 0 && perfilItems.every(p => p.aprobadorId === firstAprob)) {
+				const found = aprobadores.find(a => a.ci === firstAprob);
+				setSelectedAprobador(found ?? null);
 			}
 		}
-	}, [perfilItems, subAlmacenes]);
+	}, [perfilItems, subAlmacenes, aprobadores]);
 
 	// ─── mutation ─────────────────────────────────────────────────────────────
 
@@ -106,13 +96,15 @@ export default function PerfilPage() {
 			enqueueSnackbar('Seleccione un sub-almacén', { variant: 'warning' });
 			return;
 		}
-		if (aprobadorId === '') {
+		if (!selectedAprobador) {
 			enqueueSnackbar('Seleccione un aprobador', { variant: 'warning' });
 			return;
 		}
 		saveMut.mutate({
 			subAlmacenIds: [selectedSub.id],
-			aprobadorId: aprobadorId as number
+			aprobadorId: selectedAprobador.ci,
+			aprobadorNombre: selectedAprobador.nombreCompleto,
+			aprobadorCargo: selectedAprobador.cargo
 		});
 	}
 
@@ -138,10 +130,10 @@ export default function PerfilPage() {
 				</Box>
 			}
 			content={
-				<Box sx={{ p: 3, maxWidth: 800, mx: 'auto' }}>
+				<Box sx={{ p: 3, maxWidth: '60%', minWidth: 600, mx: 'auto' }}>
 					<Stack spacing={4}>
 						{/* ── Formulario ── */}
-						<Paper variant="outlined" sx={{ p: 3 }}>
+						<Paper variant="outlined" sx={{ p: 4 }}>
 							<Typography variant="subtitle1" fontWeight={600} sx={{ mb: 3 }}>
 								Configuración de perfil
 							</Typography>
@@ -172,21 +164,28 @@ export default function PerfilPage() {
 									)}
 								/>
 
-								<TextField
-									select label="Aprobador por defecto *" value={aprobadorId}
-									onChange={(e) => setAprobadorId(e.target.value === '' ? '' : Number(e.target.value))}
-									fullWidth
-								>
-									<MenuItem value=""><em>Seleccione un aprobador</em></MenuItem>
-									{usuarios.map(u => (
-										<MenuItem key={u.id} value={u.id}>
-											<Stack direction="row" spacing={1} alignItems="center">
-												<span>{u.username}</span>
-												<Chip label={u.role} color={roleColor[u.role] ?? 'default'} size="small" variant="outlined" sx={{ height: 20, fontSize: 11, textTransform: 'capitalize' }} />
+								<Autocomplete
+									options={aprobadores}
+									value={selectedAprobador}
+									onChange={(_e, newValue) => setSelectedAprobador(newValue)}
+									getOptionLabel={(option) => option.nombreCompleto}
+									isOptionEqualToValue={(opt, val) => opt.ci === val.ci}
+									renderOption={(props, option) => (
+										<li {...props} key={option.ci}>
+											<Stack sx={{ width: '100%' }}>
+												<Typography variant="body2" fontWeight={600} noWrap>
+													{option.nombreCompleto}
+												</Typography>
+												<Typography variant="caption" color="text.secondary" noWrap>
+													{option.cargo}
+												</Typography>
 											</Stack>
-										</MenuItem>
-									))}
-								</TextField>
+										</li>
+									)}
+									renderInput={(params) => (
+										<TextField {...params} label="Aprobador por defecto *" placeholder="Buscar..." />
+									)}
+								/>
 
 								<Button
 									variant="contained"
@@ -233,8 +232,12 @@ export default function PerfilPage() {
 															</Stack>
 															<Stack direction="row" spacing={1} alignItems="center">
 																<Typography variant="caption" color="text.secondary">Aprobador:</Typography>
-																<Typography variant="body2" fontWeight={600}>{perfil.aprobadorNombre}</Typography>
-																<Chip label={perfil.aprobadorRole} color={roleColor[perfil.aprobadorRole] ?? 'default'} size="small" variant="outlined" sx={{ height: 18, fontSize: 10, textTransform: 'capitalize' }} />
+																<Stack>
+																	<Typography variant="body2" fontWeight={600}>{perfil.aprobadorNombre ?? perfil.aprobadorId}</Typography>
+																	{perfil.aprobadorCargo && (
+																		<Typography variant="caption" color="text.secondary">{perfil.aprobadorCargo}</Typography>
+																	)}
+																</Stack>
 															</Stack>
 														</Paper>
 													);

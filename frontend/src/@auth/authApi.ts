@@ -11,6 +11,7 @@ type JwtClaims = {
 	role: string;
 	nombre?: string;
 	foto?: string;
+	ci?: string;
 };
 
 export type AuthSession = {
