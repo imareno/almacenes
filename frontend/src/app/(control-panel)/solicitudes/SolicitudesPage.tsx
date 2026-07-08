@@ -31,10 +31,14 @@ import {
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import {
 	SolicitudDetail,
+	SolicitudListItem,
 	SolicitudItem,
 	getSolicitudes,
 	getSolicitud,
 	createSolicitud,
+	updateSolicitud,
+	deleteSolicitud,
+	enviarSolicitud,
 	aprobarSolicitud,
 	rechazarSolicitud,
 	despacharSolicitud,
@@ -59,19 +63,12 @@ import EntregarDialog from './dialogs/EntregarDialog';
 import RechazarDialog from './dialogs/RechazarDialog';
 
 const estadoColor: Record<string, 'default' | 'success' | 'error' | 'warning' | 'info'> = {
-	pendiente: 'warning',
-	aprobada: 'info',
-	rechazada: 'error',
-	despachada: 'info',
+	borrador: 'default',
+	enviado: 'warning',
+	aprobado: 'info',
+	rechazado: 'error',
+	despachado: 'info',
 	entregado: 'success'
-};
-
-const estadoIcon: Record<string, string> = {
-	pendiente: 'lucide:clock',
-	aprobada: 'lucide:circle-check',
-	rechazada: 'lucide:circle-x',
-	despachada: 'lucide:truck',
-	entregado: 'lucide:package-check'
 };
 
 const Root = styled(FusePageSimple)(({ theme }) => ({
@@ -140,8 +137,12 @@ export default function SolicitudesPage() {
 
 	// dialog states
 	const [createOpen, setCreateOpen] = useState(false);
+	const [editingSolId, setEditingSolId] = useState<number | null>(null);
 	const [observacion, setObservacion] = useState('');
 	const [createErrors, setCreateErrors] = useState<Record<string, string>>({});
+
+	const [deleteSolTarget, setDeleteSolTarget] = useState<SolicitudListItem | null>(null);
+	const [enviarTarget, setEnviarTarget] = useState<SolicitudListItem | null>(null);
 
 	const [aprobarId, setAprobarId] = useState<number | null>(null);
 	const [rechazarId, setRechazarId] = useState<number | null>(null);
@@ -211,6 +212,40 @@ export default function SolicitudesPage() {
 			setCreateOpen(false);
 			setObservacion('');
 			setSelectedId(res.id);
+		},
+		onError: handleApiError
+	});
+
+	const updateSolMut = useMutation({
+		mutationFn: ({ id, observacion: obs }: { id: number; observacion?: string }) =>
+			updateSolicitud(id, { observacion: obs }),
+		onSuccess: () => {
+			invalidate();
+			enqueueSnackbar('Solicitud actualizada', { variant: 'success' });
+			setCreateOpen(false);
+			setEditingSolId(null);
+			setObservacion('');
+		},
+		onError: handleApiError
+	});
+
+	const enviarMut = useMutation({
+		mutationFn: (id: number) => enviarSolicitud(id),
+		onSuccess: () => {
+			invalidate();
+			enqueueSnackbar('Solicitud enviada', { variant: 'success' });
+			setEnviarTarget(null);
+		},
+		onError: handleApiError
+	});
+
+	const deleteSolMut = useMutation({
+		mutationFn: (id: number) => deleteSolicitud(id),
+		onSuccess: (_, deletedId) => {
+			invalidate();
+			if (selectedId === deletedId) setSelectedId(null);
+			enqueueSnackbar('Solicitud eliminada', { variant: 'success' });
+			setDeleteSolTarget(null);
 		},
 		onError: handleApiError
 	});
@@ -304,12 +339,25 @@ export default function SolicitudesPage() {
 	// ─── handlers ─────────────────────────────────────────────────────────────
 
 	function openCreate() {
+		setEditingSolId(null);
 		setObservacion('');
 		setCreateErrors({});
 		setCreateOpen(true);
 	}
 
+	function openEditSol(s: SolicitudListItem) {
+		setEditingSolId(s.id);
+		setObservacion(s.observacion ?? '');
+		setCreateErrors({});
+		setCreateOpen(true);
+	}
+
 	function submitCreate() {
+		if (editingSolId) {
+			updateSolMut.mutate({ id: editingSolId, observacion: observacion.trim() || undefined });
+			return;
+		}
+
 		const next: Record<string, string> = {};
 		if (!perfilItem && !almacenesAsignados.length) next.subAlmacen = 'No tiene sub-almacenes asignados';
 		setCreateErrors(next);
@@ -378,22 +426,22 @@ export default function SolicitudesPage() {
 	}
 
 	function canAprobarRechazar(sol: SolicitudDetail | null) {
-		return sol && (isAdmin || isAprobador) && sol.estado === 'pendiente';
+		return sol && (isAdmin || isAprobador) && sol.estado === 'enviado';
 	}
 
 	function canDespachar(sol: SolicitudDetail | null) {
-		return sol && (isAdmin || isAlmacenero) && sol.estado === 'aprobada';
+		return sol && (isAdmin || isAlmacenero) && sol.estado === 'aprobado';
 	}
 
 	function canEntregar(sol: SolicitudDetail | null) {
-		return sol && (isAdmin || isAlmacenero) && sol.estado === 'despachada';
+		return sol && (isAdmin || isAlmacenero) && sol.estado === 'despachado';
 	}
 
 	function canCancelar(sol: SolicitudDetail | null) {
-		return sol && (isAdmin || (isSolicitante && isOwnSol(sol))) && sol.estado === 'pendiente';
+		return sol && (isAdmin || (isSolicitante && isOwnSol(sol))) && sol.estado === 'enviado';
 	}
 
-	const isSavingCreate = createMut.isPending;
+	const isSavingCreate = createMut.isPending || updateSolMut.isPending;
 	const isSavingItem = addItemMut.isPending || updateItemMut.isPending;
 
 	// columnas items
@@ -433,7 +481,7 @@ export default function SolicitudesPage() {
 			filterable: false,
 			display: 'flex',
 			renderCell: ({ row }) =>
-				selectedSol?.estado === 'pendiente' && isOwnSol(selectedSol) ? (
+				selectedSol?.estado === 'borrador' && (isAdmin || isOwnSol(selectedSol)) ? (
 					<Stack direction="row">
 						<Tooltip title="Editar">
 							<IconButton size="small" onClick={() => openEditItem(row)}>
@@ -521,10 +569,11 @@ export default function SolicitudesPage() {
 								<MenuItem value="">
 									<em>Todos</em>
 								</MenuItem>
-								<MenuItem value="pendiente">Pendiente</MenuItem>
-								<MenuItem value="aprobada">Aprobada</MenuItem>
-								<MenuItem value="rechazada">Rechazada</MenuItem>
-								<MenuItem value="despachada">Despachada</MenuItem>
+								<MenuItem value="borrador">Borrador</MenuItem>
+								<MenuItem value="enviado">Enviado</MenuItem>
+								<MenuItem value="aprobado">Aprobado</MenuItem>
+								<MenuItem value="rechazado">Rechazado</MenuItem>
+								<MenuItem value="despachado">Despachado</MenuItem>
 								<MenuItem value="entregado">Entregado</MenuItem>
 							</TextField>
 						</Stack>
@@ -621,52 +670,90 @@ export default function SolicitudesPage() {
 										</Box>
 									)}
 									{solicitudes.map((s) => (
-										<ListItemButton
-											key={s.id}
-											selected={selectedId === s.id}
-											onClick={() => setSelectedId(s.id)}
-											sx={{ gap: 1, flexWrap: 'wrap' }}
-										>
-											<ListItemText
-												primary={
-													<Stack
-														direction="row"
-														spacing={1}
-														alignItems="center"
+									<ListItemButton
+										key={s.id}
+										selected={selectedId === s.id}
+										onClick={() => setSelectedId(s.id)}
+										sx={{ gap: 1 }}
+									>
+										<ListItemText
+											primary={
+												<Stack
+													direction="row"
+													spacing={1}
+													alignItems="center"
+												>
+													<Typography
+														variant="body2"
+														fontWeight={600}
 													>
-														<Typography
-															variant="body2"
-															fontWeight={600}
-														>
-															{s.numero}
-														</Typography>
-														<Chip
-															icon={
-																<FuseSvgIcon size={14}>
-																	{estadoIcon[s.estado] ?? 'lucide:circle'}
-																</FuseSvgIcon>
-															}
-															label={s.estado}
-															color={estadoColor[s.estado] ?? 'default'}
-															size="small"
-															sx={{
-																textTransform: 'capitalize',
-																height: 20,
-																fontSize: 11
-															}}
-														/>
-													</Stack>
-												}
-												secondary={
-													<>
-														{s.sigla ? `${s.sigla} — ` : ''}
-														{s.subAlmacenNombre} — {s.solicitante} —{' '}
-														{new Date(s.fechaSolicitud).toLocaleDateString('es-BO')}
-													</>
-												}
-												slotProps={{ secondary: { noWrap: true } }}
-											/>
-										</ListItemButton>
+														{s.numero}
+													</Typography>
+													<Chip
+														label={s.estado}
+														color={estadoColor[s.estado] ?? 'default'}
+														size="small"
+														variant="outlined"
+														sx={{
+															textTransform: 'capitalize',
+															height: 20,
+															fontSize: 11
+														}}
+													/>
+												</Stack>
+											}
+											secondary={
+												<>
+													{s.sigla ? `${s.sigla} — ` : ''}
+													{s.subAlmacenNombre} — {s.solicitante} —{' '}
+													{new Date(s.fechaSolicitud).toLocaleDateString('es-BO')}
+												</>
+											}
+											slotProps={{ secondary: { noWrap: true } }}
+										/>
+										{s.estado === 'borrador' && (isAdmin || isOwnSol(s)) && (
+											<Stack
+												direction="row"
+												sx={{ flexShrink: 0 }}
+											>
+												<Tooltip title="Editar">
+													<IconButton
+														size="small"
+														onClick={(e) => {
+															e.stopPropagation();
+															openEditSol(s);
+														}}
+													>
+														<FuseSvgIcon size={16}>lucide:pencil</FuseSvgIcon>
+													</IconButton>
+												</Tooltip>
+												<Tooltip title="Enviar">
+													<IconButton
+														size="small"
+														color="primary"
+														onClick={(e) => {
+															e.stopPropagation();
+															setEnviarTarget(s);
+														}}
+													>
+														<FuseSvgIcon size={16}>lucide:send</FuseSvgIcon>
+													</IconButton>
+												</Tooltip>
+												<Tooltip title="Eliminar">
+													<IconButton
+														size="small"
+														color="error"
+														onClick={(e) => {
+															e.stopPropagation();
+															setDeleteSolTarget(s);
+														}}
+													>
+														<FuseSvgIcon size={16}>lucide:trash-2</FuseSvgIcon>
+													</IconButton>
+												</Tooltip>
+											</Stack>
+										)}
+									</ListItemButton>
 									))}
 								</List>
 							</Paper>
@@ -727,14 +814,10 @@ export default function SolicitudesPage() {
 														{selectedSol.numero}
 													</Typography>
 													<Chip
-														icon={
-															<FuseSvgIcon size={14}>
-																{estadoIcon[selectedSol.estado] ?? 'lucide:circle'}
-															</FuseSvgIcon>
-														}
 														label={selectedSol.estado}
 														color={estadoColor[selectedSol.estado] ?? 'default'}
 														size="small"
+														variant="outlined"
 														sx={{ textTransform: 'capitalize' }}
 													/>
 												</Stack>
@@ -765,7 +848,7 @@ export default function SolicitudesPage() {
 															variant="caption"
 															color="text.secondary"
 														>
-															{selectedSol.estado === 'rechazada'
+															{selectedSol.estado === 'rechazado'
 																? 'Rechazado'
 																: 'Aprobado'}
 															:{' '}
@@ -904,7 +987,7 @@ export default function SolicitudesPage() {
 											>
 												Materiales solicitados
 											</Typography>
-											{selectedSol.estado === 'pendiente' && isOwnSol(selectedSol) && (
+											{selectedSol.estado === 'borrador' && (isAdmin || isOwnSol(selectedSol)) && (
 												<Button
 													variant="contained"
 													size="small"
@@ -936,60 +1019,64 @@ export default function SolicitudesPage() {
 				}
 			/>
 
-			{/* ── Diálogo crear solicitud ── */}
+			{/* ── Diálogo crear/editar solicitud ── */}
 			<Dialog
 				open={createOpen}
-				onClose={() => setCreateOpen(false)}
+				onClose={() => {
+					setCreateOpen(false);
+					setEditingSolId(null);
+				}}
 				fullWidth
 				maxWidth="sm"
 			>
-				<DialogTitle>Nueva Solicitud</DialogTitle>
+				<DialogTitle>{editingSolId ? 'Editar Solicitud' : 'Nueva Solicitud'}</DialogTitle>
 				<DialogContent dividers>
 					<Stack
 						spacing={2.5}
 						sx={{ pt: 0.5 }}
 					>
-						{perfilItem ? (
-							<Paper
-								variant="outlined"
-								sx={{ p: 2, bgcolor: 'action.hover' }}
-							>
-								<Stack spacing={0.5}>
-									<Typography
-										variant="caption"
-										color="text.secondary"
-									>
-										Sub-almacén (según su perfil)
-									</Typography>
-									<Typography
-										variant="body1"
-										fontWeight={600}
-									>
-										{perfilItem.sigla
-											? `${perfilItem.sigla} — ${perfilItem.subAlmacenNombre}`
-											: perfilItem.subAlmacenNombre}
-									</Typography>
-									<Typography
-										variant="body2"
-										color="text.secondary"
-									>
-										{perfilItem.almacenNombre}
-									</Typography>
-								</Stack>
-							</Paper>
-						) : (
-							<TextField
-								select
-								label="Sub-almacén *"
-								fullWidth
-								disabled
-								helperText="Configure su perfil para asignar un sub-almacén"
-							>
-								<MenuItem value="">
-									<em>Sin sub-almacén asignado</em>
-								</MenuItem>
-							</TextField>
-						)}
+						{!editingSolId &&
+							(perfilItem ? (
+								<Paper
+									variant="outlined"
+									sx={{ p: 2, bgcolor: 'action.hover' }}
+								>
+									<Stack spacing={0.5}>
+										<Typography
+											variant="caption"
+											color="text.secondary"
+										>
+											Sub-almacén (según su perfil)
+										</Typography>
+										<Typography
+											variant="body1"
+											fontWeight={600}
+										>
+											{perfilItem.sigla
+												? `${perfilItem.sigla} — ${perfilItem.subAlmacenNombre}`
+												: perfilItem.subAlmacenNombre}
+										</Typography>
+										<Typography
+											variant="body2"
+											color="text.secondary"
+										>
+											{perfilItem.almacenNombre}
+										</Typography>
+									</Stack>
+								</Paper>
+							) : (
+								<TextField
+									select
+									label="Sub-almacén *"
+									fullWidth
+									disabled
+									helperText="Configure su perfil para asignar un sub-almacén"
+								>
+									<MenuItem value="">
+										<em>Sin sub-almacén asignado</em>
+									</MenuItem>
+								</TextField>
+							))}
 						<TextField
 							label="Motivo / Observación"
 							value={observacion}
@@ -1004,7 +1091,10 @@ export default function SolicitudesPage() {
 				</DialogContent>
 				<DialogActions sx={{ px: 3, py: 2 }}>
 					<Button
-						onClick={() => setCreateOpen(false)}
+						onClick={() => {
+							setCreateOpen(false);
+							setEditingSolId(null);
+						}}
 						disabled={isSavingCreate}
 					>
 						Cancelar
@@ -1012,9 +1102,13 @@ export default function SolicitudesPage() {
 					<Button
 						variant="contained"
 						onClick={submitCreate}
-						disabled={isSavingCreate || !canCreate()}
+						disabled={isSavingCreate || (!editingSolId && !canCreate())}
 					>
-						{isSavingCreate ? 'Creando...' : 'Crear'}
+						{isSavingCreate
+							? 'Guardando...'
+							: editingSolId
+								? 'Guardar'
+								: 'Crear'}
 					</Button>
 				</DialogActions>
 			</Dialog>
@@ -1123,6 +1217,59 @@ export default function SolicitudesPage() {
 						onClick={() => deleteItemTarget && deleteItemMut.mutate(deleteItemTarget.id)}
 					>
 						{deleteItemMut.isPending ? 'Eliminando...' : 'Eliminar'}
+					</Button>
+				</DialogActions>
+			</Dialog>
+
+			{/* ── Diálogo enviar solicitud ── */}
+			<Dialog
+				open={!!enviarTarget}
+				onClose={() => setEnviarTarget(null)}
+				maxWidth="xs"
+				fullWidth
+			>
+				<DialogTitle>Enviar solicitud</DialogTitle>
+				<DialogContent>
+					<Typography>
+						¿Enviar la solicitud <strong>{enviarTarget?.numero}</strong> para su aprobación? No
+						podrá editarla después.
+					</Typography>
+				</DialogContent>
+				<DialogActions sx={{ px: 3, py: 2 }}>
+					<Button onClick={() => setEnviarTarget(null)}>Cancelar</Button>
+					<Button
+						variant="contained"
+						color="primary"
+						disabled={enviarMut.isPending}
+						onClick={() => enviarTarget && enviarMut.mutate(enviarTarget.id)}
+					>
+						{enviarMut.isPending ? 'Enviando...' : 'Enviar'}
+					</Button>
+				</DialogActions>
+			</Dialog>
+
+			{/* ── Diálogo eliminar solicitud ── */}
+			<Dialog
+				open={!!deleteSolTarget}
+				onClose={() => setDeleteSolTarget(null)}
+				maxWidth="xs"
+				fullWidth
+			>
+				<DialogTitle>Eliminar solicitud</DialogTitle>
+				<DialogContent>
+					<Typography>
+						¿Eliminar la solicitud <strong>{deleteSolTarget?.numero}</strong>?
+					</Typography>
+				</DialogContent>
+				<DialogActions sx={{ px: 3, py: 2 }}>
+					<Button onClick={() => setDeleteSolTarget(null)}>Cancelar</Button>
+					<Button
+						variant="contained"
+						color="error"
+						disabled={deleteSolMut.isPending}
+						onClick={() => deleteSolTarget && deleteSolMut.mutate(deleteSolTarget.id)}
+					>
+						{deleteSolMut.isPending ? 'Eliminando...' : 'Eliminar'}
 					</Button>
 				</DialogActions>
 			</Dialog>

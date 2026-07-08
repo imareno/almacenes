@@ -25,7 +25,7 @@ export default function AprobarDialog({ open, onClose, isPending, solicitudId, o
 			<DialogTitle>Aprobar solicitud</DialogTitle>
 			<DialogContent>
 				<Typography>
-					¿Aprobar la solicitud <strong>#{solicitudId}</strong>? Pasará a estado &quot;aprobada&quot;.
+					¿Aprobar la solicitud <strong>#{solicitudId}</strong>? Pasará a estado &quot;aprobado&quot;.
 				</Typography>
 			</DialogContent>
 			<DialogActions sx={{ px: 3, py: 2 }}>

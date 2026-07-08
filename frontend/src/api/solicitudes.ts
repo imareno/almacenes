@@ -79,6 +79,19 @@ export interface SolicitudCreateInput {
 export const createSolicitud = (data: SolicitudCreateInput): Promise<{ id: number; numero: string }> =>
 	api.post('solicitudes', { json: data }).json<{ id: number; numero: string }>();
 
+export interface SolicitudUpdateInput {
+	observacion?: string;
+}
+
+export const updateSolicitud = (id: number, data: SolicitudUpdateInput): Promise<void> =>
+	api.put(`solicitudes/${id}`, { json: data }).then(() => undefined);
+
+export const deleteSolicitud = (id: number): Promise<void> =>
+	api.delete(`solicitudes/${id}`).then(() => undefined);
+
+export const enviarSolicitud = (id: number): Promise<void> =>
+	api.put(`solicitudes/${id}/enviar`).then(() => undefined);
+
 // ─── Solicitud Items ───────────────────────────────────────────────────────────
 
 export interface SolicitudItemUpsertInput {

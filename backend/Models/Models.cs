@@ -89,7 +89,7 @@ public class Solicitud
     public string    Numero          { get; set; } = "";
     public int       SolicitanteId   { get; set; }
     public int       AlmacenId       { get; set; }
-    public string    Estado          { get; set; } = "pendiente";
+    public string    Estado          { get; set; } = "borrador";
     public int?      AprobadorId     { get; set; }
     public int?      AlmaceneroId    { get; set; }
     public DateTime  FechaSolicitud  { get; set; }

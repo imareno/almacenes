@@ -1,7 +1,9 @@
 import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSnackbar } from 'notistack';
+import { motion } from 'motion/react';
 import FusePageSimple from '@fuse/core/FusePageSimple';
+import PageBreadcrumb from 'src/components/PageBreadcrumb';
 import { styled } from '@mui/material/styles';
 import {
 	Box,
@@ -25,15 +27,10 @@ import {
 	Typography
 } from '@mui/material';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
-import AddIcon from '@mui/icons-material/Add';
-import EditIcon from '@mui/icons-material/Edit';
-import DeleteIcon from '@mui/icons-material/Delete';
-import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import ShoppingCartIcon from '@mui/icons-material/ShoppingCart';
+import FuseSvgIcon from '@fuse/core/FuseSvgIcon';
 import {
 	CompraListItem,
 	CompraCreateInput,
-	CompraDetail,
 	CompraItem,
 	CompraItemInput,
 	getCompras,
@@ -46,7 +43,7 @@ import {
 	updateCompraItem,
 	deleteCompraItem
 } from '../../../api/compras';
-import { AlmacenAsignado, getAlmacenesAsignados } from '../../../api/almacenes';
+import { getAlmacenesAsignados } from '../../../api/almacenes';
 import { getMateriales } from '../../../api/materiales';
 
 // ─── tipos ───────────────────────────────────────────────────────────────────
@@ -362,8 +359,8 @@ export default function ComprasPage() {
 			field: 'actions', headerName: '', width: 80, sortable: false, filterable: false, display: 'flex',
 			renderCell: ({ row }) => selectedCompra?.estado === 'pendiente' ? (
 				<Stack direction="row">
-					<Tooltip title="Editar"><IconButton size="small" onClick={() => openEditItem(row)}><EditIcon sx={{ fontSize: 16 }} /></IconButton></Tooltip>
-					<Tooltip title="Eliminar"><IconButton size="small" color="error" onClick={() => setDeleteItemTarget(row)}><DeleteIcon sx={{ fontSize: 16 }} /></IconButton></Tooltip>
+					<Tooltip title="Editar"><IconButton size="small" onClick={() => openEditItem(row)}><FuseSvgIcon size={16}>lucide:pencil</FuseSvgIcon></IconButton></Tooltip>
+					<Tooltip title="Eliminar"><IconButton size="small" color="error" onClick={() => setDeleteItemTarget(row)}><FuseSvgIcon size={16}>lucide:trash-2</FuseSvgIcon></IconButton></Tooltip>
 				</Stack>
 			) : null
 		}
@@ -378,9 +375,32 @@ export default function ComprasPage() {
 	return (
 		<Root
 			header={
-				<Box sx={{ p: 3, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-					<Typography variant="h5" fontWeight={600}>Compras</Typography>
-				</Box>
+				<div className="w-full px-4 py-4 md:px-6">
+					<PageBreadcrumb className="mb-2" />
+					<div className="flex items-center gap-1 sm:flex-row md:items-start">
+						<div className="flex flex-auto flex-col gap-1">
+							<motion.span
+								initial={{ x: -20 }}
+								animate={{ x: 0, transition: { delay: 0.2 } }}
+							>
+								<Typography className="text-4xl leading-none font-extrabold tracking-tight">
+									Compras
+								</Typography>
+							</motion.span>
+							<motion.span
+								initial={{ y: -20, opacity: 0 }}
+								animate={{ y: 0, opacity: 1, transition: { delay: 0.2 } }}
+							>
+								<Typography
+									color="text.secondary"
+									className="ml-0.5 text-base font-medium"
+								>
+									{loadingCompras ? 'Cargando...' : `${compras.length} compras`}
+								</Typography>
+							</motion.span>
+						</div>
+					</div>
+				</div>
 			}
 			content={
 				<Box sx={{ p: 3, height: '100%', display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -419,7 +439,7 @@ export default function ComprasPage() {
 								<Typography variant="subtitle1" fontWeight={600}>Compras</Typography>
 								<Tooltip title={filtroSubAlmacenId === '' ? 'Seleccione un sub-almacén en el filtro' : ''}>
 									<span>
-										<Button variant="contained" size="small" startIcon={<AddIcon />} onClick={openCreateCompra} disabled={filtroSubAlmacenId === ''}>
+										<Button variant="contained" size="small" startIcon={<FuseSvgIcon>lucide:plus</FuseSvgIcon>} onClick={openCreateCompra} disabled={filtroSubAlmacenId === ''}>
 											Nueva Compra
 										</Button>
 									</span>
@@ -444,9 +464,9 @@ export default function ComprasPage() {
 										/>
 										{c.estado === 'pendiente' && (
 											<Stack direction="row" sx={{ flexShrink: 0 }}>
-												<Tooltip title="Editar"><IconButton size="small" onClick={(e) => { e.stopPropagation(); openEditCompra(c); }}><EditIcon sx={{ fontSize: 16 }} /></IconButton></Tooltip>
-												<Tooltip title="Concluir"><IconButton size="small" color="success" onClick={(e) => { e.stopPropagation(); setConcluirTarget(c); }}><CheckCircleIcon sx={{ fontSize: 16 }} /></IconButton></Tooltip>
-												<Tooltip title="Eliminar"><IconButton size="small" color="error" onClick={(e) => { e.stopPropagation(); setDeleteTarget(c); }}><DeleteIcon sx={{ fontSize: 16 }} /></IconButton></Tooltip>
+												<Tooltip title="Editar"><IconButton size="small" onClick={(e) => { e.stopPropagation(); openEditCompra(c); }}><FuseSvgIcon size={16}>lucide:pencil</FuseSvgIcon></IconButton></Tooltip>
+												<Tooltip title="Concluir"><IconButton size="small" color="success" onClick={(e) => { e.stopPropagation(); setConcluirTarget(c); }}><FuseSvgIcon size={16}>lucide:circle-check</FuseSvgIcon></IconButton></Tooltip>
+												<Tooltip title="Eliminar"><IconButton size="small" color="error" onClick={(e) => { e.stopPropagation(); setDeleteTarget(c); }}><FuseSvgIcon size={16}>lucide:trash-2</FuseSvgIcon></IconButton></Tooltip>
 											</Stack>
 										)}
 									</ListItemButton>
@@ -458,7 +478,7 @@ export default function ComprasPage() {
 						<Paper variant="outlined" sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
 							{!selectedCompra ? (
 								<Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 1, color: 'text.secondary' }}>
-									<ShoppingCartIcon sx={{ fontSize: 48, opacity: 0.3 }} />
+									<FuseSvgIcon size={48} className="opacity-30">lucide:shopping-cart</FuseSvgIcon>
 									<Typography variant="body1">Seleccione una compra para ver su detalle</Typography>
 								</Box>
 							) : (
@@ -480,7 +500,7 @@ export default function ComprasPage() {
 												Total: {totalCompra.toLocaleString('es-BO', { minimumFractionDigits: 2 })}
 											</Typography>
 											{selectedCompra.estado === 'pendiente' && (
-												<Button variant="contained" size="small" startIcon={<AddIcon />} onClick={openCreateItem}>
+												<Button variant="contained" size="small" startIcon={<FuseSvgIcon>lucide:plus</FuseSvgIcon>} onClick={openCreateItem}>
 													Agregar ítem
 												</Button>
 											)}

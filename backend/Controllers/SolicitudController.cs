@@ -29,22 +29,46 @@ public class SolicitudController : ControllerBase
 
         var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
         var role   = User.FindFirstValue(ClaimTypes.Role)!;
+        var ci     = User.FindFirstValue("ci");
 
         using var conn = _db.CreateConnection();
 
         var where = new List<string> { "s.active = true" };
         var p     = new DynamicParameters();
 
-        // Solicitante solo ve sus propias solicitudes
-        if (role == "solicitante")
+        // Visibilidad por rol
+        switch (role)
         {
-            where.Add("s.solicitante_id = @userId");
-            p.Add("userId", userId);
-        }
-        else if (solicitanteId.HasValue)
-        {
-            where.Add("s.solicitante_id = @solicitanteId");
-            p.Add("solicitanteId", solicitanteId.Value);
+            case "admin":
+                // Ve todas; filtro opcional por solicitante
+                if (solicitanteId.HasValue)
+                {
+                    where.Add("s.solicitante_id = @solicitanteId");
+                    p.Add("solicitanteId", solicitanteId.Value);
+                }
+                break;
+
+            case "aprobador":
+                // Sus propias solicitudes + las que debe aprobar (por CI)
+                where.Add("(s.solicitante_id = @userId OR s.aprobador_ci = @ci)");
+                p.Add("userId", userId);
+                p.Add("ci", ci);
+                break;
+
+            case "almacenero":
+                // Sus propias solicitudes + las de sus sub-almacenes asignados (almacen_encargado)
+                where.Add(@"(s.solicitante_id = @userId OR s.sub_almacen_id IN (
+                    SELECT sa2.id FROM sub_almacenes sa2
+                    JOIN almacen_encargado ae ON ae.almacen_id = sa2.almacen_id
+                    WHERE ae.user_id = @userId AND ae.active = true))");
+                p.Add("userId", userId);
+                break;
+
+            default:
+                // solicitante (y demás) solo ven sus propias solicitudes
+                where.Add("s.solicitante_id = @userId");
+                p.Add("userId", userId);
+                break;
         }
 
         if (!string.IsNullOrWhiteSpace(estado))
@@ -63,19 +87,16 @@ public class SolicitudController : ControllerBase
 
         var items = await conn.QueryAsync<SolicitudRow>(
             $@"SELECT s.id, s.numero, s.estado,
-                      s.solicitante_id, us.username AS solicitante,
+                      s.solicitante_id, s.solicitante_nombre AS solicitante,
                       s.sub_almacen_id, sa.nombre AS sub_almacen_nombre, sa.sigla,
                       a.id AS almacen_id, a.nombre AS almacen_nombre,
-                      s.aprobador_id, ua.username AS aprobador,
-                      s.almacenero_id, ual.username AS almacenero,
+                      s.aprobador_id, s.aprobador_nombre AS aprobador,
+                      s.almacenero_id, s.almacenero_nombre AS almacenero,
                       s.fecha_solicitud, s.fecha_aprobacion, s.fecha_despacho, s.fecha_entrega,
                       s.observacion, s.created_at
                FROM solicitudes s
-               JOIN users          us  ON us.id  = s.solicitante_id
                JOIN sub_almacenes  sa  ON sa.id  = s.sub_almacen_id
                JOIN almacenes      a   ON a.id   = sa.almacen_id
-               LEFT JOIN users ua  ON ua.id  = s.aprobador_id
-               LEFT JOIN users ual ON ual.id = s.almacenero_id
                {clausula}
                ORDER BY s.created_at DESC
                LIMIT @limit OFFSET @offset", p);
@@ -94,19 +115,16 @@ public class SolicitudController : ControllerBase
 
         var solicitud = await conn.QuerySingleOrDefaultAsync<SolicitudRow>(
             @"SELECT s.id, s.numero, s.estado,
-                     s.solicitante_id, us.username AS solicitante,
+                     s.solicitante_id, s.solicitante_nombre AS solicitante,
                      s.sub_almacen_id, sa.nombre AS sub_almacen_nombre, sa.sigla,
                      a.id AS almacen_id, a.nombre AS almacen_nombre,
-                     s.aprobador_id, ua.username AS aprobador,
-                     s.almacenero_id, ual.username AS almacenero,
+                     s.aprobador_id, s.aprobador_nombre AS aprobador,
+                     s.almacenero_id, s.almacenero_nombre AS almacenero,
                      s.fecha_solicitud, s.fecha_aprobacion, s.fecha_despacho, s.fecha_entrega,
                      s.observacion, s.created_at
               FROM solicitudes s
-              JOIN users          us  ON us.id  = s.solicitante_id
               JOIN sub_almacenes  sa  ON sa.id  = s.sub_almacen_id
               JOIN almacenes      a   ON a.id   = sa.almacen_id
-              LEFT JOIN users ua  ON ua.id  = s.aprobador_id
-              LEFT JOIN users ual ON ual.id = s.almacenero_id
               WHERE s.id = @id",
             new { id });
 
@@ -134,59 +152,172 @@ public class SolicitudController : ControllerBase
     {
         using var conn = _db.CreateConnection();
 
-        var subExiste = await conn.ExecuteScalarAsync<int?>(
-            "SELECT id FROM sub_almacenes WHERE id = @id AND active = true",
+        var sub = await conn.QuerySingleOrDefaultAsync<SubAlmacenSigla>(
+            "SELECT id, sigla FROM sub_almacenes WHERE id = @id AND active = true",
             new { id = req.SubAlmacenId });
 
-        if (subExiste is null)
+        if (sub is null)
             return BadRequest(new { error = "Sub-almacén no encontrado o inactivo" });
 
-        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-
-        var solId = await conn.ExecuteScalarAsync<int>(
-            @"INSERT INTO solicitudes (numero, solicitante_id, sub_almacen_id, observacion)
-              VALUES ('TEMP', @userId, @subAlmacenId, @obs)
-              RETURNING id",
-            new { userId, subAlmacenId = req.SubAlmacenId, obs = req.Observacion?.Trim() });
-
-        var numero = $"SOL-{DateTime.UtcNow:yyyy}-{solId:D6}";
-        await conn.ExecuteAsync(
-            "UPDATE solicitudes SET numero = @numero WHERE id = @id",
-            new { numero, id = solId });
-
-        if (req.Items is not null && req.Items.Count > 0)
+        // Validar ítems antes de abrir la transacción
+        if (req.Items is not null)
         {
-            conn.Open();
-            using var tx = conn.BeginTransaction();
-            try
+            foreach (var item in req.Items)
+            {
+                if (item.Cantidad <= 0)
+                    return BadRequest(new { error = "La cantidad solicitada debe ser mayor a cero" });
+
+                var matExiste = await conn.ExecuteScalarAsync<int?>(
+                    "SELECT id FROM materiales WHERE id = @id AND active = true",
+                    new { id = item.MaterialId });
+
+                if (matExiste is null)
+                    return BadRequest(new { error = $"Material {item.MaterialId} no encontrado o inactivo" });
+            }
+        }
+
+        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        var nombre = User.FindFirstValue("nombre") ?? User.Identity?.Name;
+
+        conn.Open();
+        using var tx = conn.BeginTransaction();
+        try
+        {
+            // Incrementar secuencia_solicitudes (reinicia por año) y generar número
+            var anio = DateTime.Now.Year;
+
+            var secuencia = await conn.ExecuteScalarAsync<int>(
+                @"UPDATE sub_almacenes
+                  SET secuencia_solicitudes = CASE WHEN anio_solicitudes = @anio THEN secuencia_solicitudes + 1 ELSE 1 END,
+                      anio_solicitudes = @anio
+                  WHERE id = @id
+                  RETURNING secuencia_solicitudes",
+                new { id = req.SubAlmacenId, anio }, tx);
+
+            var prefijo = string.IsNullOrWhiteSpace(sub.Sigla) ? "SOL" : sub.Sigla;
+            var numero  = $"{prefijo}-{anio}-{secuencia:D6}";
+
+            var solId = await conn.ExecuteScalarAsync<int>(
+                @"INSERT INTO solicitudes (numero, solicitante_id, solicitante_nombre, sub_almacen_id, estado, observacion)
+                  VALUES (@numero, @userId, @nombre, @subAlmacenId, 'borrador', @obs)
+                  RETURNING id",
+                new { numero, userId, nombre, subAlmacenId = req.SubAlmacenId, obs = req.Observacion?.Trim() }, tx);
+
+            if (req.Items is not null && req.Items.Count > 0)
             {
                 foreach (var item in req.Items)
                 {
-                    if (item.Cantidad <= 0)
-                        return BadRequest(new { error = "La cantidad solicitada debe ser mayor a cero" });
-
-                    var matExiste = await conn.ExecuteScalarAsync<int?>(
-                        "SELECT id FROM materiales WHERE id = @id AND active = true",
-                        new { id = item.MaterialId }, tx);
-
-                    if (matExiste is null)
-                        return BadRequest(new { error = $"Material {item.MaterialId} no encontrado o inactivo" });
-
                     await conn.ExecuteAsync(
                         @"INSERT INTO solicitud_items (solicitud_id, material_id, cantidad_solicitada)
                           VALUES (@solId, @materialId, @cantidad)",
                         new { solId, materialId = item.MaterialId, cantidad = item.Cantidad }, tx);
                 }
-                tx.Commit();
             }
-            catch
-            {
-                tx.Rollback();
-                throw;
-            }
-        }
 
-        return CreatedAtAction(nameof(GetById), new { id = solId }, new { id = solId, numero });
+            tx.Commit();
+            return CreatedAtAction(nameof(GetById), new { id = solId }, new { id = solId, numero });
+        }
+        catch
+        {
+            tx.Rollback();
+            throw;
+        }
+    }
+
+    // PUT /api/solicitudes/{id}  (editar observacion, solo borrador)
+    [HttpPut("{id:int}")]
+    [Authorize(Roles = "admin,solicitante")]
+    public async Task<IActionResult> UpdateSolicitud(int id, [FromBody] SolicitudUpdateRequest req)
+    {
+        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        var role   = User.FindFirstValue(ClaimTypes.Role)!;
+
+        using var conn = _db.CreateConnection();
+
+        var sol = await conn.QuerySingleOrDefaultAsync<SolConSolicitante>(
+            "SELECT id, estado, solicitante_id FROM solicitudes WHERE id = @id AND active = true", new { id });
+
+        if (sol is null) return NotFound(new { error = "Solicitud no encontrada" });
+        if (sol.Estado != "borrador")
+            return BadRequest(new { error = "Solo se puede editar una solicitud en estado borrador" });
+        if (role != "admin" && sol.SolicitanteId != userId)
+            return Forbid();
+
+        await conn.ExecuteAsync(
+            "UPDATE solicitudes SET observacion = @obs WHERE id = @id",
+            new { obs = req.Observacion?.Trim(), id });
+
+        return NoContent();
+    }
+
+    // DELETE /api/solicitudes/{id}  (baja lógica, solo borrador)
+    [HttpDelete("{id:int}")]
+    [Authorize(Roles = "admin,solicitante")]
+    public async Task<IActionResult> DeleteSolicitud(int id)
+    {
+        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        var role   = User.FindFirstValue(ClaimTypes.Role)!;
+
+        using var conn = _db.CreateConnection();
+
+        var sol = await conn.QuerySingleOrDefaultAsync<SolConSolicitante>(
+            "SELECT id, estado, solicitante_id FROM solicitudes WHERE id = @id AND active = true", new { id });
+
+        if (sol is null) return NotFound(new { error = "Solicitud no encontrada" });
+        if (sol.Estado != "borrador")
+            return BadRequest(new { error = "Solo se puede eliminar una solicitud en estado borrador" });
+        if (role != "admin" && sol.SolicitanteId != userId)
+            return Forbid();
+
+        await conn.ExecuteAsync(
+            "UPDATE solicitudes SET active = false WHERE id = @id", new { id });
+
+        return NoContent();
+    }
+
+    // PUT /api/solicitudes/{id}/enviar  (borrador → pendiente)
+    [HttpPut("{id:int}/enviar")]
+    [Authorize(Roles = "admin,solicitante")]
+    public async Task<IActionResult> EnviarSolicitud(int id)
+    {
+        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        var role   = User.FindFirstValue(ClaimTypes.Role)!;
+
+        using var conn = _db.CreateConnection();
+
+        var sol = await conn.QuerySingleOrDefaultAsync<SolConSolicitante>(
+            "SELECT id, estado, solicitante_id FROM solicitudes WHERE id = @id AND active = true", new { id });
+
+        if (sol is null) return NotFound(new { error = "Solicitud no encontrada" });
+        if (sol.Estado != "borrador")
+            return BadRequest(new { error = "Solo se puede enviar una solicitud en estado borrador" });
+        if (role != "admin" && sol.SolicitanteId != userId)
+            return Forbid();
+
+        var tieneItems = await conn.ExecuteScalarAsync<int>(
+            "SELECT COUNT(*) FROM solicitud_items WHERE solicitud_id = @id", new { id });
+
+        if (tieneItems == 0)
+            return BadRequest(new { error = "No se puede enviar una solicitud sin ítems" });
+
+        // Aprobador asignado desde el perfil del solicitante (por sub-almacén)
+        var aprobador = await conn.QuerySingleOrDefaultAsync<PerfilAprobador>(
+            @"SELECT p.aprobador_id AS aprobador_ci, p.aprobador_nombre
+              FROM perfil p
+              JOIN solicitudes s ON s.solicitante_id = p.persona_id AND s.sub_almacen_id = p.sub_almacen_id
+              WHERE s.id = @id",
+            new { id });
+
+        if (aprobador is null || string.IsNullOrWhiteSpace(aprobador.AprobadorCi))
+            return BadRequest(new { error = "El solicitante no tiene un aprobador configurado en su perfil para este sub-almacén" });
+
+        await conn.ExecuteAsync(
+            @"UPDATE solicitudes
+              SET estado = 'enviado', aprobador_ci = @aprobadorCi, aprobador_nombre = @aprobadorNombre
+              WHERE id = @id",
+            new { aprobadorCi = aprobador.AprobadorCi, aprobadorNombre = aprobador.AprobadorNombre, id });
+
+        return NoContent();
     }
 
     // PUT /api/solicitudes/{id}/aprobar
@@ -200,16 +331,18 @@ public class SolicitudController : ControllerBase
             "SELECT id, estado FROM solicitudes WHERE id = @id", new { id });
 
         if (sol is null) return NotFound(new { error = "Solicitud no encontrada" });
-        if (sol.Estado != "pendiente")
-            return BadRequest(new { error = $"Solo se puede aprobar una solicitud pendiente. Estado actual: {sol.Estado}" });
+        if (sol.Estado != "enviado")
+            return BadRequest(new { error = $"Solo se puede aprobar una solicitud enviada. Estado actual: {sol.Estado}" });
 
         var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        var nombre = User.FindFirstValue("nombre") ?? User.Identity?.Name;
 
         await conn.ExecuteAsync(
             @"UPDATE solicitudes
-              SET estado = 'aprobada', aprobador_id = @userId, fecha_aprobacion = CURRENT_DATE
+              SET estado = 'aprobado', aprobador_id = @userId,
+                  aprobador_nombre = @nombre, fecha_aprobacion = CURRENT_DATE
               WHERE id = @id",
-            new { userId, id });
+            new { userId, nombre, id });
 
         return NoContent();
     }
@@ -225,17 +358,18 @@ public class SolicitudController : ControllerBase
             "SELECT id, estado FROM solicitudes WHERE id = @id", new { id });
 
         if (sol is null) return NotFound(new { error = "Solicitud no encontrada" });
-        if (sol.Estado != "pendiente")
-            return BadRequest(new { error = $"Solo se puede rechazar una solicitud pendiente. Estado actual: {sol.Estado}" });
+        if (sol.Estado != "enviado")
+            return BadRequest(new { error = $"Solo se puede rechazar una solicitud enviada. Estado actual: {sol.Estado}" });
 
         var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        var nombre = User.FindFirstValue("nombre") ?? User.Identity?.Name;
 
         await conn.ExecuteAsync(
             @"UPDATE solicitudes
-              SET estado = 'rechazada', aprobador_id = @userId,
+              SET estado = 'rechazado', aprobador_id = @userId, aprobador_nombre = @nombre,
                   fecha_aprobacion = CURRENT_DATE, observacion = @obs
               WHERE id = @id",
-            new { userId, obs = req.Observacion?.Trim(), id });
+            new { userId, nombre, obs = req.Observacion?.Trim(), id });
 
         return NoContent();
     }
@@ -262,10 +396,11 @@ public class SolicitudController : ControllerBase
                 new { id }, tx);
 
             if (sol is null) return NotFound(new { error = "Solicitud no encontrada" });
-            if (sol.Estado != "aprobada")
+            if (sol.Estado != "aprobado")
                 return BadRequest(new { error = $"Solo se puede despachar una solicitud aprobada. Estado actual: {sol.Estado}" });
 
             var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+            var nombre = User.FindFirstValue("nombre") ?? User.Identity?.Name;
 
             foreach (var itemReq in req.Items)
             {
@@ -323,9 +458,10 @@ public class SolicitudController : ControllerBase
 
             await conn.ExecuteAsync(
                 @"UPDATE solicitudes
-                  SET estado = 'despachada', almacenero_id = @userId, fecha_despacho = @fecha
+                  SET estado = 'despachado', almacenero_id = @userId,
+                      almacenero_nombre = @nombre, fecha_despacho = @fecha
                   WHERE id = @id",
-                new { userId, fecha = req.Fecha, id }, tx);
+                new { userId, nombre, fecha = req.Fecha, id }, tx);
 
             tx.Commit();
             return NoContent();
@@ -355,7 +491,7 @@ public class SolicitudController : ControllerBase
                 "SELECT id, estado FROM solicitudes WHERE id = @id", new { id }, tx);
 
             if (sol is null) return NotFound(new { error = "Solicitud no encontrada" });
-            if (sol.Estado != "despachada")
+            if (sol.Estado != "despachado")
                 return BadRequest(new { error = $"Solo se puede registrar entrega de una solicitud despachada. Estado actual: {sol.Estado}" });
 
             foreach (var itemReq in req.Items)
@@ -408,14 +544,14 @@ public class SolicitudController : ControllerBase
             "SELECT id, estado, solicitante_id FROM solicitudes WHERE id = @id", new { id });
 
         if (sol is null) return NotFound(new { error = "Solicitud no encontrada" });
-        if (sol.Estado != "pendiente")
-            return BadRequest(new { error = "Solo se puede cancelar una solicitud en estado pendiente" });
+        if (sol.Estado != "enviado")
+            return BadRequest(new { error = "Solo se puede cancelar una solicitud enviada" });
 
         if (role != "admin" && sol.SolicitanteId != userId)
             return Forbid();
 
         await conn.ExecuteAsync(
-            "UPDATE solicitudes SET estado = 'rechazada', observacion = 'Cancelada por el solicitante' WHERE id = @id",
+            "UPDATE solicitudes SET estado = 'rechazado', observacion = 'Cancelada por el solicitante' WHERE id = @id",
             new { id });
 
         return NoContent();
@@ -437,8 +573,8 @@ public class SolicitudController : ControllerBase
             "SELECT id, estado FROM solicitudes WHERE id = @id AND active = true", new { id });
 
         if (sol is null) return NotFound(new { error = "Solicitud no encontrada" });
-        if (sol.Estado != "pendiente")
-            return BadRequest(new { error = "Solo se pueden agregar ítems a una solicitud en estado pendiente" });
+        if (sol.Estado != "borrador")
+            return BadRequest(new { error = "Solo se pueden agregar ítems a una solicitud en estado borrador" });
 
         var materialExiste = await conn.ExecuteScalarAsync<int?>(
             "SELECT id FROM materiales WHERE id = @id AND active = true",
@@ -470,8 +606,8 @@ public class SolicitudController : ControllerBase
             "SELECT id, estado FROM solicitudes WHERE id = @id AND active = true", new { id });
 
         if (sol is null) return NotFound(new { error = "Solicitud no encontrada" });
-        if (sol.Estado != "pendiente")
-            return BadRequest(new { error = "Solo se pueden editar ítems de una solicitud en estado pendiente" });
+        if (sol.Estado != "borrador")
+            return BadRequest(new { error = "Solo se pueden editar ítems de una solicitud en estado borrador" });
 
         var existe = await conn.ExecuteScalarAsync<int?>(
             "SELECT id FROM solicitud_items WHERE id = @itemId AND solicitud_id = @id",
@@ -499,8 +635,8 @@ public class SolicitudController : ControllerBase
             "SELECT id, estado FROM solicitudes WHERE id = @id AND active = true", new { id });
 
         if (sol is null) return NotFound(new { error = "Solicitud no encontrada" });
-        if (sol.Estado != "pendiente")
-            return BadRequest(new { error = "Solo se pueden eliminar ítems de una solicitud en estado pendiente" });
+        if (sol.Estado != "borrador")
+            return BadRequest(new { error = "Solo se pueden eliminar ítems de una solicitud en estado borrador" });
 
         var deleted = await conn.ExecuteAsync(
             "DELETE FROM solicitud_items WHERE id = @itemId AND solicitud_id = @id",
@@ -512,16 +648,29 @@ public class SolicitudController : ControllerBase
     }
 
     // ── Tipos internos ────────────────────────────────────────
-    private record SolicitudRow(
-        int Id, string Numero, string Estado,
-        int SolicitanteId, string Solicitante,
-        int SubAlmacenId, string SubAlmacenNombre, string? Sigla,
-        int AlmacenId, string AlmacenNombre,
-        int? AprobadorId, string? Aprobador,
-        int? AlmaceneroId, string? Almacenero,
-        DateTime FechaSolicitud, DateTime? FechaAprobacion,
-        DateTime? FechaDespacho, DateTime? FechaEntrega,
-        string? Observacion, DateTime CreatedAt);
+    private class SolicitudRow
+    {
+        public int Id { get; set; }
+        public string Numero { get; set; } = "";
+        public string Estado { get; set; } = "";
+        public int SolicitanteId { get; set; }
+        public string? Solicitante { get; set; }
+        public int SubAlmacenId { get; set; }
+        public string SubAlmacenNombre { get; set; } = "";
+        public string? Sigla { get; set; }
+        public int AlmacenId { get; set; }
+        public string AlmacenNombre { get; set; } = "";
+        public int? AprobadorId { get; set; }
+        public string? Aprobador { get; set; }
+        public int? AlmaceneroId { get; set; }
+        public string? Almacenero { get; set; }
+        public DateOnly FechaSolicitud { get; set; }
+        public DateOnly? FechaAprobacion { get; set; }
+        public DateOnly? FechaDespacho { get; set; }
+        public DateOnly? FechaEntrega { get; set; }
+        public string? Observacion { get; set; }
+        public DateTime CreatedAt { get; set; }
+    }
 
     private record SolicitudItemRow(
         int Id, int MaterialId, string Codigo, string MaterialNombre, string UnidadMedida,
@@ -531,11 +680,14 @@ public class SolicitudController : ControllerBase
     private record SolConAlmacen(int Id, string Estado, int AlmacenId);
     private record SolConSolicitante(int Id, string Estado, int SolicitanteId);
     private record SolItem(int Id, int MaterialId, decimal CantidadSolicitada, decimal CantidadDespachada);
+    private record SubAlmacenSigla(int Id, string? Sigla);
+    private record PerfilAprobador(string? AprobadorCi, string? AprobadorNombre);
 }
 
 // ── Request DTOs ──────────────────────────────────────────────
 public record SolicitudItemRequest(int MaterialId, decimal Cantidad);
 public record SolicitudCreateRequest(int SubAlmacenId, List<SolicitudItemRequest>? Items = null, string? Observacion = null);
+public record SolicitudUpdateRequest(string? Observacion);
 public record SolicitudItemUpsertRequest(int MaterialId, decimal Cantidad);
 public record ObservacionRequest(string? Observacion);
 public record DespachoItemRequest(int SolicitudItemId, decimal CantidadDespachada);

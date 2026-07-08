@@ -40,16 +40,23 @@
     PepsHelper.cs            → lógica PEPS/FIFO con bloqueo FOR UPDATE
     JwtHelper.cs             → generación y validación JWT
     DapperDateOnlyHandler.cs → TypeHandler para mapear DateOnly ↔ PostgreSQL DATE
-  Scripts/
-    01_schema.sql            → creación de tablas principales
-    02_seed.sql              → datos iniciales (almacenes, materiales, usuarios de prueba)
-    03_sesiones.sql          → tabla sesiones (registro de logins)
-    04_almacen_encargado.sql → tabla almacen_encargado (determina rol almacenero)
-    05_datos_usuario.sql     → columnas JSONB adicionales (datos_usuario, datos_solicitante)
-    06_almacen_encargado_rol.sql → columna rol en almacen_encargado (ya no se usa, reemplazada por admin)
-    07_sub_almacenes.sql         → tabla sub_almacenes (detalle de almacenes)
-    08_almacen_encargado_admin.sql → columna admin en almacen_encargado
-    09_perfil.sql                → tabla perfil (persona_id, sub_almacen_id, aprobador_id)
+     Scripts/
+     01_schema.sql            → creación de tablas principales
+     02_seed.sql              → datos iniciales (almacenes, materiales, usuarios de prueba)
+     03_sesiones.sql          → tabla sesiones (registro de logins)
+     04_almacen_encargado.sql → tabla almacen_encargado (determina rol almacenero)
+     05_datos_usuario.sql     → columnas JSONB adicionales (datos_usuario, datos_solicitante)
+     06_almacen_encargado_rol.sql → columna rol en almacen_encargado (ya no se usa, reemplazada por admin)
+     07_sub_almacenes.sql         → tabla sub_almacenes (detalle de almacenes)
+     08_almacen_encargado_admin.sql → columna admin en almacen_encargado
+     09_perfil.sql                → tabla perfil (persona_id, sub_almacen_id, aprobador_id)
+     10_perfil_aprobador_ci.sql   → cambia perfil.aprobador_id de INT a VARCHAR (CI del servicio externo)
+     11_materiales_sin_universal.sql
+     12_solicitudes_sub_almacen.sql → sub_almacen_id en solicitudes + columna active
+     13_secuencias_anio.sql         → anio_ingresos/anio_solicitudes para reinicio anual de secuencias
+     14_solicitudes_datos_usuario.sql → columnas nombre snapshot (solicitante/aprobador/almacenero_nombre)
+     15_solicitudes_borrador.sql      → agrega estado 'borrador' al CHECK
+     16_solicitudes_estados_flujo.sql → renombra estados + columna aprobador_ci
 
 /frontend                    → Fuse React Template (TypeScript)
   vite.config.mts            → proxy /api → localhost:5252, port 3000
@@ -106,19 +113,21 @@ almacenes       → id, nombre, descripcion, active
 
 -- Sub-almacenes (detalle de almacenes)
 sub_almacenes   → id, almacen_id (FK almacenes), nombre, sigla (UNIQUE por almacén),
-                   descripcion, secuencia_ingresos, secuencia_solicitudes, active
-  secuencia_ingresos/secuencia_solicitudes: contadores internos (no visibles en UI)
+                   descripcion, secuencia_ingresos, secuencia_solicitudes,
+                   anio_ingresos, anio_solicitudes, active
+  secuencia_ingresos/secuencia_solicitudes: contadores internos que reinician cada año
+  (anio_ingresos/anio_solicitudes guardan el año actual de cada secuencia)
 
 -- Materiales
 materiales      → id, codigo, nombre, descripcion, unidad_medida,
                    categoria, active, created_at
 
--- Compras (cabecera) — numero se genera al concluir con secuencia_ingresos
+-- Compras (cabecera) — numero se genera al concluir con secuencia_ingresos (reinicio anual)
 compras         → id, numero (UNIQUE, nullable hasta concluir), proveedor, detalle,
                    fecha (DATE), estado, sub_almacen_id (FK sub_almacenes),
                    user_id, active, created_at
   estados: 'pendiente' | 'concluido' | 'generado'
-  numero formato: SIGLA-YYYY-000001 (generado al concluir)
+  numero formato: SIGLA-YYYY-000001 (generado al concluir, secuencia reinicia cada año)
 
 -- Detalle de compras
 compra_items    → id, compra_id (FK compras CASCADE), material_id (FK materiales),
@@ -132,11 +141,15 @@ movimientos     → id, tipo, material_id, almacen_id, cantidad,
   tipo: 'ingreso' | 'salida'
 
 -- Solicitudes
-solicitudes     → id, numero, solicitante_id, sub_almacen_id (FK sub_almacenes), estado,
-                   aprobador_id, almacenero_id, fecha_solicitud,
-                   fecha_aprobacion, fecha_despacho, fecha_entrega,
+solicitudes     → id, numero, solicitante_id, solicitante_nombre, sub_almacen_id (FK sub_almacenes), estado,
+                   aprobador_id, aprobador_ci, aprobador_nombre, almacenero_id, almacenero_nombre,
+                   fecha_solicitud, fecha_aprobacion, fecha_despacho, fecha_entrega,
                    observacion, active, created_at
-  estados: 'pendiente' | 'aprobada' | 'rechazada' | 'despachada' | 'entregado'
+  estados: 'borrador' | 'enviado' | 'aprobado' | 'rechazado' | 'despachado' | 'entregado'
+  numero: se genera al crear con secuencia_solicitudes (reinicio anual), formato SIGLA-YYYY-000001
+  NO existe tabla 'users' en la BD real: solicitante_id/aprobador_id/almacenero_id son IDs del
+  servicio externo (JWT sub, INT). Los nombres se guardan como snapshot (solicitante_nombre, etc.).
+  aprobador_ci = CI del aprobador asignado desde perfil.aprobador_id al enviar.
 
 -- Detalle de solicitudes
 solicitud_items → id, solicitud_id, material_id, cantidad_solicitada,
@@ -160,7 +173,8 @@ almacen_encargado → almacen_id, user_id, admin, active, created_at
 
 -- Perfil del usuario (configuración sub-almacén + aprobador por defecto)
 perfil          → id, persona_id, sub_almacen_id (FK sub_almacenes),
-                   aprobador_id (FK users), created_at
+                   aprobador_id (VARCHAR(20), CI del servicio externo),
+                   aprobador_nombre, aprobador_cargo, created_at
   UNIQUE(persona_id, sub_almacen_id)
   persona_id = user_id del JWT (servicio externo)
 ```
@@ -184,16 +198,22 @@ JWT se guarda en `localStorage` bajo la key `jwt_access_token`.
 
 ```
 SOLICITANTE crea solicitud
-  → estado: "pendiente"
-  → registra: solicitante_id, almacen_id, items (cantidad_solicitada)
+  → estado: "borrador"
+  → registra: solicitante_id, solicitante_nombre, sub_almacen_id, items (cantidad_solicitada)
+  → ítems se pueden agregar/editar/eliminar mientras esté en borrador
+
+SOLICITANTE envía para aprobación
+  → estado: "enviado"
+  → registra: aprobador_ci y aprobador_nombre desde el perfil del solicitante
+  → aquí se valida que tenga al menos un ítem
 
 APROBADOR aprueba o rechaza
-  → aprobada:  estado "aprobada"  | registra: aprobador_id, fecha_aprobacion
-  → rechazada: estado "rechazada" | registra: aprobador_id, fecha_aprobacion, observacion
+  → aprobado:  estado "aprobado"  | registra: aprobador_id, aprobador_nombre, fecha_aprobacion
+  → rechazado: estado "rechazado" | registra: aprobador_id, aprobador_nombre, fecha_aprobacion, observacion
 
 ALMACENERO despacha materiales
-  → estado: "despachada"
-  → registra: almacenero_id, fecha_despacho, cantidad_despachada por item
+  → estado: "despachado"
+  → registra: almacenero_id, almacenero_nombre, fecha_despacho, cantidad_despachada por item
   → genera movimientos de salida aplicando lógica PEPS
   → descuenta lotes correspondientes (fecha_ingreso ASC)
 
@@ -203,17 +223,19 @@ ALMACENERO confirma entrega física
   → NO genera movimientos — solo confirmación física
   → fin del flujo
 
-SOLICITANTE puede cancelar (si estado = "pendiente")
-  → estado: "rechazada" + observacion "Cancelada por el solicitante"
+SOLICITANTE puede cancelar (si estado = "enviado")
+  → estado: "rechazado" + observacion "Cancelada por el solicitante"
 ```
 
 ## Reglas del flujo
 
-- Cualquier usuario con perfil configurado puede crear solicitudes (estado "pendiente")
-- Solo el solicitante dueño (o admin) puede cancelar (estado "pendiente")
-- Solo el aprobador (o admin) puede aprobar o rechazar (estado "pendiente")
-- Solo el almacenero (o admin) puede despachar (estado "aprobada")
-- Solo el almacenero (o admin) puede confirmar entrega (estado "despachada")
+- Cualquier usuario con perfil configurado puede crear solicitudes (estado "borrador")
+- Solo el solicitante dueño (o admin) puede editar/eliminar/enviar una solicitud en borrador
+- Solo el aprobador (o admin) puede aprobar o rechazar (estado "enviado")
+- Solo el almacenero (o admin) puede despachar (estado "aprobado")
+- Solo el almacenero (o admin) puede confirmar entrega (estado "despachado")
+- Solo el solicitante dueño (o admin) puede cancelar (estado "enviado")
+- Los ítems solo se pueden crear/editar/eliminar en estado "borrador"
 - El movimiento de salida se genera al DESPACHAR, no al entregar
 - Admin puede ejecutar cualquier acción
 
@@ -295,14 +317,17 @@ GROUP BY material_id, almacen_id
 - POST   /api/movimientos/salida             → salida manual con PEPS
 
 ### Solicitudes
-- GET    /api/solicitudes                    → filtros estado/almacen/solicitante (rol-aware)
+- GET    /api/solicitudes                    → filtro por rol: solicitante→propias, aprobador→propias+asignadas, almacenero→propias+sub-almacenes, admin→todas
 - GET    /api/solicitudes/{id}
-- POST   /api/solicitudes                    → cualquier rol con perfil configurado (admin siempre puede)
+- POST   /api/solicitudes                    → cualquier rol con perfil configurado (estado 'borrador')
+- PUT    /api/solicitudes/{id}               → editar observacion (solo borrador, dueño/admin)
+- DELETE /api/solicitudes/{id}               → baja lógica (solo borrador, dueño/admin)
+- PUT    /api/solicitudes/{id}/enviar        → borrador→enviado + registra aprobador_ci desde perfil
 - PUT    /api/solicitudes/{id}/aprobar       → aprobador/admin
 - PUT    /api/solicitudes/{id}/rechazar      → aprobador/admin
 - PUT    /api/solicitudes/{id}/despachar     → almacenero/admin + PEPS
 - PUT    /api/solicitudes/{id}/entregar      → almacenero/admin
-- PUT    /api/solicitudes/{id}/cancelar      → solicitante dueño/admin (solo pendiente)
+- PUT    /api/solicitudes/{id}/cancelar      → solicitante dueño/admin (solo enviado)
 
 ### Reportes
 - GET /api/reportes/existencias              → stock actual por material/almacén
@@ -316,6 +341,7 @@ GROUP BY material_id, almacen_id
 - PUT    /api/perfil                         → reemplaza perfil (subAlmacenIds + aprobadorId)
 - GET    /api/perfil/sub-almacenes           → todos los sub-almacenes activos agrupados por almacén
 - GET    /api/perfil/usuarios                → lista de usuarios activos (para selectores)
+- GET    /api/perfil/aprobadores             → 🟡 obtiene aprobadores del servicio externo de contrataciones
 
 ## Frontend — React + Fuse (MUI) — TypeScript
 
@@ -336,8 +362,8 @@ GROUP BY material_id, almacen_id
 
 ### Páginas construidas
 - /almacenes              → ✅ CRUD maestro-detalle split view 30/70 (almacenes + sub-almacenes)
-- /compras                → ✅ Split view 40/60: lista compras + detalle items. Filtro por sub-almacén (agrupado por almacén). CRUD cabecera + CRUD items. Número auto-generado al concluir. Autocomplete materiales.
-- /solicitudes            → ✅ Split view 40/60: lista solicitudes + detalle items. 6 acciones según rol+estado (aprobar, rechazar, despachar, entregar, cancelar). Crear con búsqueda de materiales. Header con PageBreadcrumb + animaciones motion. Badge de perfil estilo OrdersStatus (Tailwind). Skeleton loaders. Diálogos extraídos en `dialogs/`. FuseSvgIcon lucide en todos los iconos. canCreate() solo valida perfil (cualquier rol puede crear).
+- /compras                → ✅ Split view 40/60, filtro sub-almacén agrupado, CRUD cabecera+items, número auto al concluir. Header con PageBreadcrumb + motion + contador (igual que Solicitudes). Iconos FuseSvgIcon lucide. Autocomplete materiales.
+- /solicitudes            → ✅ Split view 40/60: lista solicitudes + detalle items. Flujo completo: borrador→enviado→aprobado/rechazado→despachado→entregado. Editar/enviar/eliminar en lista borrador. 7+ acciones según rol+estado. Header con PageBreadcrumb + motion. Chips outlined sin icono (estilo Compras). Skeleton loaders. Diálogos extraídos en `dialogs/`. canCreate() solo valida perfil.
 - /perfil                 → 🟡 Formulario single-select sub-almacén (agrupado por almacén) + aprobador. PUT guarda todo. Pendiente: obtener aprobadores de servicio externo.
 - /dashboard              → placeholder (solo título, sin KPIs)
 
@@ -455,7 +481,7 @@ api/                          → un archivo por módulo (TypeScript)
 - ✅ Almacenes — CRUD maestro-detalle split view 30/70 (almacenes + sub-almacenes con sigla)
 - ✅ Compras — Split view 40/60, filtro sub-almacén agrupado, CRUD cabecera+items, número auto al concluir
 - ✅ API almacenes.ts + compras.ts + materiales.ts
-- ✅ Solicitudes — Split view 40/60, filtro estado, 6 acciones por rol, crear con búsqueda de materiales. Header con PageBreadcrumb + motion. Badges perfil Tailwind. Skeleton loaders. 6 diálogos extraídos en dialogs/. FuseSvgIcon lucide. Botón crear con Tooltip (patrón Compras). canCreate solo valida perfil.
+- ✅ Solicitudes — Split view 40/60, filtro estado, flujo borrador→enviado→aprobado/rechazado→despachado→entregado. Editar/enviar/eliminar en lista borrador. Acciones por rol. Header con PageBreadcrumb + motion. Chips outlined sin icono (estilo Compras). Skeleton loaders. 6 diálogos extraídos en dialogs/. FuseSvgIcon lucide. canCreate solo valida perfil.
 - ✅ API solicitudes.ts + perfil.ts
 - 🟡 Perfil — formulario single-select sub-almacén + aprobador. Pendiente: aprobadores desde servicio externo
 - 🟡 Dashboard — placeholder (solo título, sin KPIs)
@@ -485,6 +511,8 @@ api/                          → un archivo por módulo (TypeScript)
 17. Records posicionales de Dapper fallan con DateOnly — usar clases con propiedades para rows con columnas DATE
 18. Filtro sub-almacén en compras usa ListSubheader de MUI para agrupar por almacén
 19. GET /api/almacenes/asignados devuelve almacenes+sub-almacenes anidados según rol (admin=todos, almacenero=asignados)
-20. Compras: numero nullable, se genera al concluir con formato SIGLA-YYYY-NNNNNN usando secuencia_ingresos del sub-almacén
+20. Compras: numero nullable, se genera al concluir con formato SIGLA-YYYY-NNNNNN usando secuencia_ingresos del sub-almacén (reinicio anual)
 21. UserMenu: se agregó opción "Perfil" en el dropdown del avatar (ícono user-cog), junto a "Cerrar Sesión"
-22. Perfil: persona_id viene del JWT (sub claim), sub_almacen_id es single-select agrupado por almacén, aprobador_id de la tabla users local (pendiente migrar a servicio externo)
+22. Perfil: persona_id viene del JWT (sub claim), sub_almacen_id es single-select agrupado por almacén, aprobador_id es CI del servicio externo (VARCHAR)
+23. Solicitudes: secuencia_solicitudes también reinicia por año, igual que compras
+24. Solicitudes: el `enviar` registra aprobador_ci y aprobador_nombre desde el perfil del solicitante

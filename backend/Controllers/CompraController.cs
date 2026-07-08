@@ -189,20 +189,23 @@ public class CompraController : ControllerBase
             if (tieneItems == 0)
                 return BadRequest(new { error = "No se puede concluir una compra sin ítems" });
 
-            // Incrementar secuencia_ingresos y generar número
+            // Incrementar secuencia_ingresos (reinicia por año) y generar número
             var sigla = await conn.ExecuteScalarAsync<string?>(
                 "SELECT sigla FROM sub_almacenes WHERE id = @id",
                 new { id = compra.SubAlmacenId }, tx);
 
+            var anio = DateTime.Now.Year;
+
             var secuencia = await conn.ExecuteScalarAsync<int>(
                 @"UPDATE sub_almacenes
-                  SET secuencia_ingresos = secuencia_ingresos + 1
+                  SET secuencia_ingresos = CASE WHEN anio_ingresos = @anio THEN secuencia_ingresos + 1 ELSE 1 END,
+                      anio_ingresos = @anio
                   WHERE id = @id
                   RETURNING secuencia_ingresos",
-                new { id = compra.SubAlmacenId }, tx);
+                new { id = compra.SubAlmacenId, anio }, tx);
 
             var prefijo = string.IsNullOrWhiteSpace(sigla) ? "C" : sigla;
-            var numero = $"{prefijo}-{DateTime.Now:yyyy}-{secuencia:D6}";
+            var numero = $"{prefijo}-{anio}-{secuencia:D6}";
 
             await conn.ExecuteAsync(
                 "UPDATE compras SET estado = 'concluido', numero = @numero WHERE id = @id",
