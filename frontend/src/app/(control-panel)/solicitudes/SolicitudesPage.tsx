@@ -49,8 +49,7 @@ import {
 	deleteSolicitudItem,
 	SolicitudCreateInput,
 	SolicitudItemUpsertInput,
-	DespachoItemInput,
-	EntregaItemInput
+	DespachoItemInput
 } from '../../../api/solicitudes';
 import { getAlmacenesAsignados } from '../../../api/almacenes';
 import { getMyPerfil } from '../../../api/perfil';
@@ -283,8 +282,8 @@ export default function SolicitudesPage() {
 	});
 
 	const entregarMut = useMutation({
-		mutationFn: ({ id, fecha, items }: { id: number; fecha: string; items: EntregaItemInput[] }) =>
-			entregarSolicitud(id, fecha, items),
+		mutationFn: ({ id, fecha }: { id: number; fecha: string }) =>
+			entregarSolicitud(id, fecha),
 		onSuccess: () => {
 			invalidate();
 			enqueueSnackbar('Entrega registrada', { variant: 'success' });
@@ -448,7 +447,6 @@ export default function SolicitudesPage() {
 	const itemColumns: GridColDef<SolicitudItem>[] = [
 		{ field: 'codigo', headerName: 'Código', width: 100, display: 'flex' },
 		{ field: 'materialNombre', headerName: 'Material', flex: 1, minWidth: 180, display: 'flex' },
-		{ field: 'unidadMedida', headerName: 'Unidad', width: 80, display: 'flex' },
 		{
 			field: 'cantidadSolicitada',
 			headerName: 'Solicitado',
@@ -458,16 +456,8 @@ export default function SolicitudesPage() {
 			renderCell: ({ value }) => <Typography variant="body2">{Number(value).toLocaleString('es-BO')}</Typography>
 		},
 		{
-			field: 'cantidadDespachada',
+			field: 'cantidadAprobada',
 			headerName: 'Despachado',
-			width: 110,
-			type: 'number',
-			display: 'flex',
-			renderCell: ({ value }) => <Typography variant="body2">{Number(value).toLocaleString('es-BO')}</Typography>
-		},
-		{
-			field: 'cantidadEntregada',
-			headerName: 'Entregado',
 			width: 110,
 			type: 'number',
 			display: 'flex',
@@ -704,9 +694,22 @@ export default function SolicitudesPage() {
 											}
 											secondary={
 												<>
-													{s.sigla ? `${s.sigla} — ` : ''}
-													{s.subAlmacenNombre} — {s.solicitante} —{' '}
-													{new Date(s.fechaSolicitud).toLocaleDateString('es-BO')}
+													<Box
+														component="span"
+														sx={{ display: 'block' }}
+													>
+														{s.sigla ? `${s.sigla} — ` : ''}
+														{s.subAlmacenNombre} — {s.solicitante} —{' '}
+														{new Date(s.fechaSolicitud).toLocaleDateString('es-BO')}
+													</Box>
+													{s.observacion && (
+														<Box
+															component="span"
+															sx={{ display: 'block', fontStyle: 'italic' }}
+														>
+															Motivo: {s.observacion}
+														</Box>
+													)}
 												</>
 											}
 											slotProps={{ secondary: { noWrap: true } }}
@@ -821,28 +824,11 @@ export default function SolicitudesPage() {
 														sx={{ textTransform: 'capitalize' }}
 													/>
 												</Stack>
-												<Typography
-													variant="body2"
-													color="text.secondary"
-												>
-													{selectedSol.sigla ? `${selectedSol.sigla} — ` : ''}
-													{selectedSol.subAlmacenNombre} ({selectedSol.almacenNombre}) —
-													Solicitante: {selectedSol.solicitante}
-												</Typography>
 												<Stack
 													direction="row"
 													spacing={2}
 													sx={{ mt: 0.5, flexWrap: 'wrap' }}
 												>
-													<Typography
-														variant="caption"
-														color="text.secondary"
-													>
-														Creado:{' '}
-														{new Date(selectedSol.fechaSolicitud).toLocaleDateString(
-															'es-BO'
-														)}
-													</Typography>
 													{selectedSol.fechaAprobacion && (
 														<Typography
 															variant="caption"
@@ -884,19 +870,6 @@ export default function SolicitudesPage() {
 														</Typography>
 													)}
 												</Stack>
-												{selectedSol.observacion && (
-													<Typography
-														variant="caption"
-														color="text.secondary"
-														sx={{
-															display: 'block',
-															mt: 0.5,
-															fontStyle: 'italic'
-														}}
-													>
-														Motivo: {selectedSol.observacion}
-													</Typography>
-												)}
 											</Box>
 											<Stack
 												direction="row"
@@ -1303,7 +1276,7 @@ export default function SolicitudesPage() {
 				onClose={() => setEntregaOpen(false)}
 				isPending={entregarMut.isPending}
 				items={solItems}
-				onSubmit={(fecha, items) => entregarMut.mutate({ id: selectedId!, fecha, items })}
+				onSubmit={(fecha) => entregarMut.mutate({ id: selectedId!, fecha })}
 			/>
 
 			<CancelarDialog

@@ -134,8 +134,8 @@ public class SolicitudController : ControllerBase
             return Forbid();
 
         var items = await conn.QueryAsync<SolicitudItemRow>(
-            @"SELECT si.id, si.material_id, m.codigo, m.nombre AS material_nombre, m.unidad_medida,
-                     si.cantidad_solicitada, si.cantidad_despachada, si.cantidad_entregada
+            @"SELECT si.id, si.material_id, m.codigo, m.nombre AS material_nombre,
+                     si.cantidad_solicitada, si.cantidad_aprobada
               FROM solicitud_items si
               JOIN materiales m ON m.id = si.material_id
               WHERE si.solicitud_id = @id
@@ -194,8 +194,8 @@ public class SolicitudController : ControllerBase
                   RETURNING secuencia_solicitudes",
                 new { id = req.SubAlmacenId, anio }, tx);
 
-            var prefijo = string.IsNullOrWhiteSpace(sub.Sigla) ? "SOL" : sub.Sigla;
-            var numero  = $"{prefijo}-{anio}-{secuencia:D6}";
+            var sigla   = string.IsNullOrWhiteSpace(sub.Sigla) ? "GEN" : sub.Sigla;
+            var numero  = $"SOL-{sigla}-{anio}-{secuencia:D6}";
 
             var solId = await conn.ExecuteScalarAsync<int>(
                 @"INSERT INTO solicitudes (numero, solicitante_id, solicitante_nombre, sub_almacen_id, estado, observacion)
@@ -208,8 +208,10 @@ public class SolicitudController : ControllerBase
                 foreach (var item in req.Items)
                 {
                     await conn.ExecuteAsync(
-                        @"INSERT INTO solicitud_items (solicitud_id, material_id, cantidad_solicitada)
-                          VALUES (@solId, @materialId, @cantidad)",
+                        @"INSERT INTO solicitud_items (solicitud_id, material_id, cantidad_solicitada, cantidad_aprobada)
+                          VALUES (@solId, @materialId, @cantidad, 0)
+                          ON CONFLICT (solicitud_id, material_id)
+                          DO UPDATE SET cantidad_solicitada = solicitud_items.cantidad_solicitada + EXCLUDED.cantidad_solicitada",
                         new { solId, materialId = item.MaterialId, cantidad = item.Cantidad }, tx);
                 }
             }
@@ -404,11 +406,11 @@ public class SolicitudController : ControllerBase
 
             foreach (var itemReq in req.Items)
             {
-                if (itemReq.CantidadDespachada <= 0)
-                    return BadRequest(new { error = "La cantidad despachada debe ser mayor a cero" });
+                if (itemReq.CantidadAprobada <= 0)
+                    return BadRequest(new { error = "La cantidad aprobada debe ser mayor a cero" });
 
                 var solItem = await conn.QuerySingleOrDefaultAsync<SolItem>(
-                    @"SELECT id, material_id, cantidad_solicitada, cantidad_despachada
+                    @"SELECT id, material_id, cantidad_solicitada, cantidad_aprobada
                       FROM solicitud_items
                       WHERE id = @id AND solicitud_id = @solId",
                     new { id = itemReq.SolicitudItemId, solId = id }, tx);
@@ -416,7 +418,7 @@ public class SolicitudController : ControllerBase
                 if (solItem is null)
                     return BadRequest(new { error = $"Ítem {itemReq.SolicitudItemId} no pertenece a esta solicitud" });
 
-                if (itemReq.CantidadDespachada > solItem.CantidadSolicitada)
+                if (itemReq.CantidadAprobada > solItem.CantidadSolicitada)
                     return BadRequest(new { error = $"No se puede despachar más de lo solicitado para el ítem {itemReq.SolicitudItemId}" });
 
                 // Consumir lotes PEPS y registrar salida
@@ -424,7 +426,7 @@ public class SolicitudController : ControllerBase
                 try
                 {
                     consumos = await PepsHelper.ConsumirLotesAsync(
-                        conn, tx, solItem.MaterialId, sol.AlmacenId, itemReq.CantidadDespachada);
+                        conn, tx, solItem.MaterialId, sol.AlmacenId, itemReq.CantidadAprobada);
                 }
                 catch (InvalidOperationException ex)
                 {
@@ -443,7 +445,7 @@ public class SolicitudController : ControllerBase
                     {
                         materialId = solItem.MaterialId,
                         almacenId  = sol.AlmacenId,
-                        cantidad   = itemReq.CantidadDespachada,
+                        cantidad   = itemReq.CantidadAprobada,
                         costo,
                         fecha      = req.Fecha,
                         solId      = id,
@@ -452,8 +454,8 @@ public class SolicitudController : ControllerBase
                     }, tx);
 
                 await conn.ExecuteAsync(
-                    "UPDATE solicitud_items SET cantidad_despachada = @cantidad WHERE id = @id",
-                    new { cantidad = itemReq.CantidadDespachada, id = solItem.Id }, tx);
+                    "UPDATE solicitud_items SET cantidad_aprobada = @cantidad WHERE id = @id",
+                    new { cantidad = itemReq.CantidadAprobada, id = solItem.Id }, tx);
             }
 
             await conn.ExecuteAsync(
@@ -478,9 +480,6 @@ public class SolicitudController : ControllerBase
     [Authorize(Roles = "admin,almacenero")]
     public async Task<IActionResult> Entregar(int id, [FromBody] EntregaRequest req)
     {
-        if (req.Items is null || req.Items.Count == 0)
-            return BadRequest(new { error = "Debe indicar los ítems entregados" });
-
         using var conn = _db.CreateConnection();
         conn.Open();
         using var tx = conn.BeginTransaction();
@@ -493,28 +492,6 @@ public class SolicitudController : ControllerBase
             if (sol is null) return NotFound(new { error = "Solicitud no encontrada" });
             if (sol.Estado != "despachado")
                 return BadRequest(new { error = $"Solo se puede registrar entrega de una solicitud despachada. Estado actual: {sol.Estado}" });
-
-            foreach (var itemReq in req.Items)
-            {
-                if (itemReq.CantidadEntregada < 0)
-                    return BadRequest(new { error = "La cantidad entregada no puede ser negativa" });
-
-                var solItem = await conn.QuerySingleOrDefaultAsync<SolItem>(
-                    @"SELECT id, material_id, cantidad_solicitada, cantidad_despachada
-                      FROM solicitud_items
-                      WHERE id = @id AND solicitud_id = @solId",
-                    new { id = itemReq.SolicitudItemId, solId = id }, tx);
-
-                if (solItem is null)
-                    return BadRequest(new { error = $"Ítem {itemReq.SolicitudItemId} no pertenece a esta solicitud" });
-
-                if (itemReq.CantidadEntregada > solItem.CantidadDespachada)
-                    return BadRequest(new { error = $"No se puede entregar más de lo despachado para el ítem {itemReq.SolicitudItemId}" });
-
-                await conn.ExecuteAsync(
-                    "UPDATE solicitud_items SET cantidad_entregada = @cantidad WHERE id = @id",
-                    new { cantidad = itemReq.CantidadEntregada, id = solItem.Id }, tx);
-            }
 
             await conn.ExecuteAsync(
                 "UPDATE solicitudes SET estado = 'entregado', fecha_entrega = @fecha WHERE id = @id",
@@ -584,8 +561,10 @@ public class SolicitudController : ControllerBase
             return BadRequest(new { error = "Material no encontrado o inactivo" });
 
         var itemId = await conn.ExecuteScalarAsync<int>(
-            @"INSERT INTO solicitud_items (solicitud_id, material_id, cantidad_solicitada)
-              VALUES (@solId, @materialId, @cantidad)
+            @"INSERT INTO solicitud_items (solicitud_id, material_id, cantidad_solicitada, cantidad_aprobada)
+              VALUES (@solId, @materialId, @cantidad, 0)
+              ON CONFLICT (solicitud_id, material_id)
+              DO UPDATE SET cantidad_solicitada = solicitud_items.cantidad_solicitada + EXCLUDED.cantidad_solicitada
               RETURNING id",
             new { solId = id, materialId = req.MaterialId, cantidad = req.Cantidad });
 
@@ -673,13 +652,13 @@ public class SolicitudController : ControllerBase
     }
 
     private record SolicitudItemRow(
-        int Id, int MaterialId, string Codigo, string MaterialNombre, string UnidadMedida,
-        decimal CantidadSolicitada, decimal CantidadDespachada, decimal CantidadEntregada);
+        int Id, int MaterialId, string Codigo, string MaterialNombre,
+        decimal CantidadSolicitada, decimal CantidadAprobada);
 
     private record SolEstado(int Id, string Estado);
     private record SolConAlmacen(int Id, string Estado, int AlmacenId);
     private record SolConSolicitante(int Id, string Estado, int SolicitanteId);
-    private record SolItem(int Id, int MaterialId, decimal CantidadSolicitada, decimal CantidadDespachada);
+    private record SolItem(int Id, int MaterialId, decimal CantidadSolicitada, decimal CantidadAprobada);
     private record SubAlmacenSigla(int Id, string? Sigla);
     private record PerfilAprobador(string? AprobadorCi, string? AprobadorNombre);
 }
@@ -690,7 +669,6 @@ public record SolicitudCreateRequest(int SubAlmacenId, List<SolicitudItemRequest
 public record SolicitudUpdateRequest(string? Observacion);
 public record SolicitudItemUpsertRequest(int MaterialId, decimal Cantidad);
 public record ObservacionRequest(string? Observacion);
-public record DespachoItemRequest(int SolicitudItemId, decimal CantidadDespachada);
+public record DespachoItemRequest(int SolicitudItemId, decimal CantidadAprobada);
 public record DespachoRequest(DateOnly Fecha, List<DespachoItemRequest> Items);
-public record EntregaItemRequest(int SolicitudItemId, decimal CantidadEntregada);
-public record EntregaRequest(DateOnly Fecha, List<EntregaItemRequest> Items);
+public record EntregaRequest(DateOnly Fecha);

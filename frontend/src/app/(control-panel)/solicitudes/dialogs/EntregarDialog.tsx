@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Dialog from '@mui/material/Dialog';
@@ -10,46 +10,27 @@ import Stack from '@mui/material/Stack';
 import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import FuseSvgIcon from '@fuse/core/FuseSvgIcon';
-import { SolicitudItem, EntregaItemInput } from '../../../../api/solicitudes';
+import { SolicitudItem } from '../../../../api/solicitudes';
 
 type Props = {
 	open: boolean;
 	onClose: () => void;
 	isPending: boolean;
 	items: SolicitudItem[];
-	onSubmit: (fecha: string, items: EntregaItemInput[]) => void;
+	onSubmit: (fecha: string) => void;
 };
 
 export default function EntregarDialog({ open, onClose, isPending, items, onSubmit }: Props) {
 	const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10));
-	const [cantidades, setCantidades] = useState<Record<number, string>>({});
 
-	const initAndOpen = () => {
-		if (open && items.length > 0) {
-			const cants: Record<number, string> = {};
-			items.forEach((item) => {
-				cants[item.id] = String(item.cantidadDespachada);
-			});
-			setCantidades(cants);
+	useEffect(() => {
+		if (open) {
 			setFecha(new Date().toISOString().slice(0, 10));
 		}
-	};
-
-	if (open && Object.keys(cantidades).length === 0) {
-		initAndOpen();
-	}
+	}, [open]);
 
 	const handleSubmit = () => {
-		const entregaItems = items
-			.filter((item) => cantidades[item.id] && Number(cantidades[item.id]) > 0)
-			.map((item) => ({
-				solicitudItemId: item.id,
-				cantidadEntregada: Number(cantidades[item.id])
-			}));
-
-		if (entregaItems.length === 0) return;
-
-		onSubmit(fecha, entregaItems);
+		onSubmit(fecha);
 	};
 
 	return (
@@ -82,7 +63,7 @@ export default function EntregarDialog({ open, onClose, isPending, items, onSubm
 							fontWeight={600}
 							sx={{ mb: 1.5 }}
 						>
-							Ítems entregados
+							Ítems a entregar
 						</Typography>
 						<Stack spacing={1.5}>
 							{items.map((item) => (
@@ -103,18 +84,9 @@ export default function EntregarDialog({ open, onClose, isPending, items, onSubm
 											variant="caption"
 											color="text.secondary"
 										>
-											Despachado: {Number(item.cantidadDespachada).toLocaleString('es-BO')}{' '}
-											{item.unidadMedida}
+											Despachado: {Number(item.cantidadAprobada).toLocaleString('es-BO')}
 										</Typography>
 									</Box>
-									<TextField
-										label="Cant. entregada"
-										type="number"
-										value={cantidades[item.id] ?? ''}
-										onChange={(e) => setCantidades((p) => ({ ...p, [item.id]: e.target.value }))}
-										size="small"
-										sx={{ width: 160 }}
-									/>
 								</Stack>
 							))}
 						</Stack>

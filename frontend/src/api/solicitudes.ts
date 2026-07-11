@@ -33,10 +33,8 @@ export interface SolicitudItem {
 	materialId: number;
 	codigo: string;
 	materialNombre: string;
-	unidadMedida: string;
 	cantidadSolicitada: number;
-	cantidadDespachada: number;
-	cantidadEntregada: number;
+	cantidadAprobada: number;
 }
 
 interface PaginatedResponse {
@@ -118,19 +116,14 @@ export const rechazarSolicitud = (id: number, observacion?: string): Promise<voi
 
 export interface DespachoItemInput {
 	solicitudItemId: number;
-	cantidadDespachada: number;
+	cantidadAprobada: number;
 }
 
 export const despacharSolicitud = (id: number, fecha: string, items: DespachoItemInput[]): Promise<void> =>
 	api.put(`solicitudes/${id}/despachar`, { json: { fecha, items } }).then(() => undefined);
 
-export interface EntregaItemInput {
-	solicitudItemId: number;
-	cantidadEntregada: number;
-}
-
-export const entregarSolicitud = (id: number, fecha: string, items: EntregaItemInput[]): Promise<void> =>
-	api.put(`solicitudes/${id}/entregar`, { json: { fecha, items } }).then(() => undefined);
+export const entregarSolicitud = (id: number, fecha: string): Promise<void> =>
+	api.put(`solicitudes/${id}/entregar`, { json: { fecha } }).then(() => undefined);
 
 export const cancelarSolicitud = (id: number): Promise<void> =>
 	api.put(`solicitudes/${id}/cancelar`).then(() => undefined);

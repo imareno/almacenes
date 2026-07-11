@@ -44,7 +44,7 @@ export default function DespacharDialog({ open, onClose, isPending, items, onSub
 			.filter((item) => cantidades[item.id] && Number(cantidades[item.id]) > 0)
 			.map((item) => ({
 				solicitudItemId: item.id,
-				cantidadDespachada: Number(cantidades[item.id])
+				cantidadAprobada: Number(cantidades[item.id])
 			}));
 
 		if (despachoItems.length === 0) return;
@@ -103,8 +103,7 @@ export default function DespacharDialog({ open, onClose, isPending, items, onSub
 											variant="caption"
 											color="text.secondary"
 										>
-											Solicitado: {Number(item.cantidadSolicitada).toLocaleString('es-BO')}{' '}
-											{item.unidadMedida}
+											Solicitado: {Number(item.cantidadSolicitada).toLocaleString('es-BO')}
 										</Typography>
 									</Box>
 									<TextField
