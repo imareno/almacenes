@@ -18,6 +18,7 @@ import { NavbarContextProvider } from '@/components/theme-layouts/components/nav
 import { QuickPanelProvider } from '@/components/theme-layouts/components/quickPanel/contexts/QuickPanelContext/QuickPanelContextProvider';
 import RootThemeProvider from '@/contexts/RootThemeProvider';
 import { NavigationContextProvider } from '@/components/theme-layouts/components/navigation/contexts/NavigationContextProvider';
+import AprobacionesNavGuard from 'src/components/AprobacionesNavGuard';
 
 const queryClient = new QueryClient({
 	defaultOptions: {
@@ -53,6 +54,7 @@ function App() {
 										<MainThemeProvider>
 											<NavbarContextProvider>
 												<NavigationContextProvider>
+													<AprobacionesNavGuard />
 													<FuseDialogContextProvider>
 														{/* Notistack Notification Provider */}
 														<SnackbarProvider

@@ -8,6 +8,7 @@ import { isTokenValid } from './utils/jwtUtils';
 import JwtAuthContext from '@auth/services/jwt/JwtAuthContext';
 import { JwtAuthContextType } from '@auth/services/jwt/JwtAuthContext';
 import { HTTPError } from 'ky';
+import { useQueryClient } from '@tanstack/react-query';
 import settingsConfig from '@/configs/settingsConfig';
 import { resetSessionRedirectUrl } from '@fuse/core/FuseAuthorization/sessionRedirectUrl';
 
@@ -26,6 +27,8 @@ export type JwtSignUpPayload = {
 
 function JwtAuthProvider(props: FuseAuthProviderComponentProps) {
 	const { ref, children, onAuthStateChanged } = props;
+
+	const queryClient = useQueryClient();
 
 	const {
 		value: tokenStorageValue,
@@ -108,6 +111,7 @@ function JwtAuthProvider(props: FuseAuthProviderComponentProps) {
 		async (credentials) => {
 			try {
 				const session = await authSignIn(credentials);
+				queryClient.clear();
 				setAuthState({
 					authStatus: 'authenticated',
 					isAuthenticated: true,
@@ -160,6 +164,7 @@ function JwtAuthProvider(props: FuseAuthProviderComponentProps) {
 		removeTokenStorageValue();
 		removeGlobalHeaders(['Authorization']);
 		resetSessionRedirectUrl();
+		queryClient.clear();
 		setAuthState({
 			authStatus: 'unauthenticated',
 			isAuthenticated: false,

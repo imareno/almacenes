@@ -29,14 +29,16 @@ const navigationConfig: FuseNavItemType[] = [
 				title: 'Almacenes',
 				type: 'item',
 				icon: 'lucide:warehouse',
-				url: '/almacenes'
+				url: '/almacenes',
+				auth: ['admin']
 			},
 			{
 				id: 'materiales',
 				title: 'Materiales',
 				type: 'item',
 				icon: 'lucide:package',
-				url: '/materiales'
+				url: '/materiales',
+				auth: ['admin', 'almacenero']
 			},
 			{
 				id: 'compras',
@@ -58,6 +60,14 @@ const navigationConfig: FuseNavItemType[] = [
 				type: 'item',
 				icon: 'lucide:clipboard-list',
 				url: '/solicitudes'
+			},
+			{
+				id: 'despachos',
+				title: 'Despachos',
+				type: 'item',
+				icon: 'lucide:truck',
+				url: '/despachos',
+				auth: ['admin', 'almacenero']
 			}
 		]
 	},
@@ -65,6 +75,7 @@ const navigationConfig: FuseNavItemType[] = [
 		id: 'reportes',
 		title: 'Reportes',
 		type: 'group',
+		auth: ['admin', 'almacenero'],
 		children: [
 			{
 				id: 'reporte-existencias',

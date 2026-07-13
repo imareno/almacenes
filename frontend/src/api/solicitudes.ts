@@ -61,6 +61,34 @@ export const getSolicitudes = (params?: {
 export const getSolicitud = (id: number): Promise<{ solicitud: SolicitudDetail; items: SolicitudItem[] }> =>
 	api.get(`solicitudes/${id}`).json<{ solicitud: SolicitudDetail; items: SolicitudItem[] }>();
 
+// ─── Aprobaciones (por CI del aprobador en el JWT) ─────────────────────────────
+
+export const getMisAprobaciones = (params?: {
+	estado?: string;
+	page?: number;
+	pageSize?: number;
+}): Promise<PaginatedResponse> => {
+	const sp: Record<string, string | number> = {};
+	if (params?.estado) sp.estado = params.estado;
+	if (params?.page != null) sp.page = params.page;
+	if (params?.pageSize != null) sp.pageSize = params.pageSize;
+	return api.get('solicitudes/mis-aprobaciones', { searchParams: sp }).json<PaginatedResponse>();
+};
+
+// ─── Despachos (almacenero, por rol del JWT) ───────────────────────────────────
+
+export const getMisDespachos = (params?: {
+	estado?: string;
+	page?: number;
+	pageSize?: number;
+}): Promise<PaginatedResponse> => {
+	const sp: Record<string, string | number> = {};
+	if (params?.estado) sp.estado = params.estado;
+	if (params?.page != null) sp.page = params.page;
+	if (params?.pageSize != null) sp.pageSize = params.pageSize;
+	return api.get('solicitudes/mis-despachos', { searchParams: sp }).json<PaginatedResponse>();
+};
+
 // ─── Creación ─────────────────────────────────────────────────────────────────
 
 export interface SolicitudItemInput {

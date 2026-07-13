@@ -104,6 +104,131 @@ public class SolicitudController : ControllerBase
         return Ok(new { total, page, pageSize, items });
     }
 
+    // GET /api/solicitudes/mis-aprobaciones?estado=&page=1&pageSize=20
+    // Solicitudes asignadas al usuario actual como aprobador (por CI del JWT).
+    // Sin filtro de estado: pendientes (enviado) + histórico (aprobado/rechazado).
+    [HttpGet("mis-aprobaciones")]
+    public async Task<IActionResult> MisAprobaciones(
+        [FromQuery] string? estado   = null,
+        [FromQuery] int     page     = 1,
+        [FromQuery] int     pageSize = 20)
+    {
+        if (page < 1)       page     = 1;
+        if (pageSize < 1)   pageSize = 20;
+        if (pageSize > 100) pageSize = 100;
+
+        var ci = User.FindFirstValue("ci");
+
+        if (string.IsNullOrWhiteSpace(ci))
+            return Ok(new { total = 0, page, pageSize, items = Array.Empty<SolicitudRow>() });
+
+        using var conn = _db.CreateConnection();
+
+        var where = new List<string> { "s.active = true", "s.aprobador_ci = @ci" };
+        var p     = new DynamicParameters();
+        p.Add("ci", ci);
+
+        if (!string.IsNullOrWhiteSpace(estado))
+        {
+            where.Add("s.estado = @estado");
+            p.Add("estado", estado.ToLower().Trim());
+        }
+
+        var clausula = "WHERE " + string.Join(" AND ", where);
+
+        var total = await conn.ExecuteScalarAsync<int>(
+            $"SELECT COUNT(*) FROM solicitudes s {clausula}", p);
+
+        p.Add("limit",  pageSize);
+        p.Add("offset", (page - 1) * pageSize);
+
+        var items = await conn.QueryAsync<SolicitudRow>(
+            $@"SELECT s.id, s.numero, s.estado,
+                      s.solicitante_id, s.solicitante_nombre AS solicitante,
+                      s.sub_almacen_id, sa.nombre AS sub_almacen_nombre, sa.sigla,
+                      a.id AS almacen_id, a.nombre AS almacen_nombre,
+                      s.aprobador_id, s.aprobador_nombre AS aprobador,
+                      s.almacenero_id, s.almacenero_nombre AS almacenero,
+                      s.fecha_solicitud, s.fecha_aprobacion, s.fecha_despacho, s.fecha_entrega,
+                      s.observacion, s.created_at
+               FROM solicitudes s
+               JOIN sub_almacenes  sa  ON sa.id  = s.sub_almacen_id
+               JOIN almacenes      a   ON a.id   = sa.almacen_id
+               {clausula}
+               ORDER BY s.created_at DESC
+               LIMIT @limit OFFSET @offset", p);
+
+        return Ok(new { total, page, pageSize, items });
+    }
+
+    // GET /api/solicitudes/mis-despachos?estado=&page=1&pageSize=20
+    // Solicitudes para despacho/entrega del almacenero: estados aprobado, despachado y entregado
+    // de los sub-almacenes que tiene asignados en almacen_encargado. Admin ve todas.
+    [HttpGet("mis-despachos")]
+    [Authorize(Roles = "admin,almacenero")]
+    public async Task<IActionResult> MisDespachos(
+        [FromQuery] string? estado   = null,
+        [FromQuery] int     page     = 1,
+        [FromQuery] int     pageSize = 20)
+    {
+        if (page < 1)       page     = 1;
+        if (pageSize < 1)   pageSize = 20;
+        if (pageSize > 100) pageSize = 100;
+
+        var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
+        var role   = User.FindFirstValue(ClaimTypes.Role)!;
+
+        using var conn = _db.CreateConnection();
+
+        var where = new List<string>
+        {
+            "s.active = true",
+            "s.estado IN ('aprobado', 'despachado', 'entregado')"
+        };
+        var p = new DynamicParameters();
+
+        if (role != "admin")
+        {
+            where.Add(@"s.sub_almacen_id IN (
+                SELECT sa2.id FROM sub_almacenes sa2
+                JOIN almacen_encargado ae ON ae.almacen_id = sa2.almacen_id
+                WHERE ae.user_id = @userId AND ae.active = true)");
+            p.Add("userId", userId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(estado))
+        {
+            where.Add("s.estado = @estado");
+            p.Add("estado", estado.ToLower().Trim());
+        }
+
+        var clausula = "WHERE " + string.Join(" AND ", where);
+
+        var total = await conn.ExecuteScalarAsync<int>(
+            $"SELECT COUNT(*) FROM solicitudes s {clausula}", p);
+
+        p.Add("limit",  pageSize);
+        p.Add("offset", (page - 1) * pageSize);
+
+        var items = await conn.QueryAsync<SolicitudRow>(
+            $@"SELECT s.id, s.numero, s.estado,
+                      s.solicitante_id, s.solicitante_nombre AS solicitante,
+                      s.sub_almacen_id, sa.nombre AS sub_almacen_nombre, sa.sigla,
+                      a.id AS almacen_id, a.nombre AS almacen_nombre,
+                      s.aprobador_id, s.aprobador_nombre AS aprobador,
+                      s.almacenero_id, s.almacenero_nombre AS almacenero,
+                      s.fecha_solicitud, s.fecha_aprobacion, s.fecha_despacho, s.fecha_entrega,
+                      s.observacion, s.created_at
+               FROM solicitudes s
+               JOIN sub_almacenes  sa  ON sa.id  = s.sub_almacen_id
+               JOIN almacenes      a   ON a.id   = sa.almacen_id
+               {clausula}
+               ORDER BY s.created_at DESC
+               LIMIT @limit OFFSET @offset", p);
+
+        return Ok(new { total, page, pageSize, items });
+    }
+
     // GET /api/solicitudes/{id}
     [HttpGet("{id:int}")]
     public async Task<IActionResult> GetById(int id)
@@ -324,17 +449,22 @@ public class SolicitudController : ControllerBase
 
     // PUT /api/solicitudes/{id}/aprobar
     [HttpPut("{id:int}/aprobar")]
-    [Authorize(Roles = "admin,aprobador")]
     public async Task<IActionResult> Aprobar(int id)
     {
         using var conn = _db.CreateConnection();
 
-        var sol = await conn.QuerySingleOrDefaultAsync<SolEstado>(
-            "SELECT id, estado FROM solicitudes WHERE id = @id", new { id });
+        var sol = await conn.QuerySingleOrDefaultAsync<SolConAprobador>(
+            "SELECT id, estado, aprobador_ci FROM solicitudes WHERE id = @id", new { id });
 
         if (sol is null) return NotFound(new { error = "Solicitud no encontrada" });
         if (sol.Estado != "enviado")
             return BadRequest(new { error = $"Solo se puede aprobar una solicitud enviada. Estado actual: {sol.Estado}" });
+
+        var role = User.FindFirstValue(ClaimTypes.Role)!;
+        var ci   = User.FindFirstValue("ci");
+
+        if (role != "admin" && (string.IsNullOrWhiteSpace(ci) || ci != sol.AprobadorCi))
+            return Forbid();
 
         var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
         var nombre = User.FindFirstValue("nombre") ?? User.Identity?.Name;
@@ -351,17 +481,22 @@ public class SolicitudController : ControllerBase
 
     // PUT /api/solicitudes/{id}/rechazar
     [HttpPut("{id:int}/rechazar")]
-    [Authorize(Roles = "admin,aprobador")]
     public async Task<IActionResult> Rechazar(int id, [FromBody] ObservacionRequest req)
     {
         using var conn = _db.CreateConnection();
 
-        var sol = await conn.QuerySingleOrDefaultAsync<SolEstado>(
-            "SELECT id, estado FROM solicitudes WHERE id = @id", new { id });
+        var sol = await conn.QuerySingleOrDefaultAsync<SolConAprobador>(
+            "SELECT id, estado, aprobador_ci FROM solicitudes WHERE id = @id", new { id });
 
         if (sol is null) return NotFound(new { error = "Solicitud no encontrada" });
         if (sol.Estado != "enviado")
             return BadRequest(new { error = $"Solo se puede rechazar una solicitud enviada. Estado actual: {sol.Estado}" });
+
+        var role = User.FindFirstValue(ClaimTypes.Role)!;
+        var ci   = User.FindFirstValue("ci");
+
+        if (role != "admin" && (string.IsNullOrWhiteSpace(ci) || ci != sol.AprobadorCi))
+            return Forbid();
 
         var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
         var nombre = User.FindFirstValue("nombre") ?? User.Identity?.Name;
@@ -658,6 +793,7 @@ public class SolicitudController : ControllerBase
     private record SolEstado(int Id, string Estado);
     private record SolConAlmacen(int Id, string Estado, int AlmacenId);
     private record SolConSolicitante(int Id, string Estado, int SolicitanteId);
+    private record SolConAprobador(int Id, string Estado, string? AprobadorCi);
     private record SolItem(int Id, int MaterialId, decimal CantidadSolicitada, decimal CantidadAprobada);
     private record SubAlmacenSigla(int Id, string? Sigla);
     private record PerfilAprobador(string? AprobadorCi, string? AprobadorNombre);

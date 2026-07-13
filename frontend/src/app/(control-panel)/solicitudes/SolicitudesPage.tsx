@@ -39,11 +39,8 @@ import {
 	updateSolicitud,
 	deleteSolicitud,
 	enviarSolicitud,
-	aprobarSolicitud,
-	rechazarSolicitud,
 	despacharSolicitud,
 	entregarSolicitud,
-	cancelarSolicitud,
 	addSolicitudItem,
 	updateSolicitudItem,
 	deleteSolicitudItem,
@@ -55,11 +52,8 @@ import { getAlmacenesAsignados } from '../../../api/almacenes';
 import { getMyPerfil } from '../../../api/perfil';
 import { getMateriales } from '../../../api/materiales';
 import useUser from '@auth/useUser';
-import AprobarDialog from './dialogs/AprobarDialog';
-import CancelarDialog from './dialogs/CancelarDialog';
 import DespacharDialog from './dialogs/DespacharDialog';
 import EntregarDialog from './dialogs/EntregarDialog';
-import RechazarDialog from './dialogs/RechazarDialog';
 
 const estadoColor: Record<string, 'default' | 'success' | 'error' | 'warning' | 'info'> = {
 	borrador: 'default',
@@ -127,8 +121,6 @@ export default function SolicitudesPage() {
 	const role = getRole(userData.data?.role);
 	const userId = userData.data?.id ?? '';
 	const isAdmin = role === 'admin';
-	const isSolicitante = role === 'solicitante';
-	const isAprobador = role === 'aprobador';
 	const isAlmacenero = role === 'almacenero';
 
 	const [filtroEstado, setFiltroEstado] = useState('');
@@ -143,11 +135,8 @@ export default function SolicitudesPage() {
 	const [deleteSolTarget, setDeleteSolTarget] = useState<SolicitudListItem | null>(null);
 	const [enviarTarget, setEnviarTarget] = useState<SolicitudListItem | null>(null);
 
-	const [aprobarId, setAprobarId] = useState<number | null>(null);
-	const [rechazarId, setRechazarId] = useState<number | null>(null);
 	const [despachoOpen, setDespachoOpen] = useState(false);
 	const [entregaOpen, setEntregaOpen] = useState(false);
-	const [cancelarId, setCancelarId] = useState<number | null>(null);
 
 	// item dialog
 	const [materialSearch, setMaterialSearch] = useState('');
@@ -249,27 +238,6 @@ export default function SolicitudesPage() {
 		onError: handleApiError
 	});
 
-	const aprobarMut = useMutation({
-		mutationFn: (id: number) => aprobarSolicitud(id),
-		onSuccess: () => {
-			invalidate();
-			enqueueSnackbar('Solicitud aprobada', { variant: 'success' });
-			setAprobarId(null);
-		},
-		onError: handleApiError
-	});
-
-	const rechazarMut = useMutation({
-		mutationFn: ({ id, obs }: { id: number; obs?: string }) => rechazarSolicitud(id, obs || undefined),
-		onSuccess: () => {
-			invalidate();
-			enqueueSnackbar('Solicitud rechazada', { variant: 'success' });
-			setRechazarId(null);
-			setSelectedId(null);
-		},
-		onError: handleApiError
-	});
-
 	const despacharMut = useMutation({
 		mutationFn: ({ id, fecha, items }: { id: number; fecha: string; items: DespachoItemInput[] }) =>
 			despacharSolicitud(id, fecha, items),
@@ -288,17 +256,6 @@ export default function SolicitudesPage() {
 			invalidate();
 			enqueueSnackbar('Entrega registrada', { variant: 'success' });
 			setEntregaOpen(false);
-		},
-		onError: handleApiError
-	});
-
-	const cancelarMut = useMutation({
-		mutationFn: (id: number) => cancelarSolicitud(id),
-		onSuccess: () => {
-			invalidate();
-			enqueueSnackbar('Solicitud cancelada', { variant: 'success' });
-			setCancelarId(null);
-			setSelectedId(null);
 		},
 		onError: handleApiError
 	});
@@ -424,20 +381,12 @@ export default function SolicitudesPage() {
 		return perfilItem !== null;
 	}
 
-	function canAprobarRechazar(sol: SolicitudDetail | null) {
-		return sol && (isAdmin || isAprobador) && sol.estado === 'enviado';
-	}
-
 	function canDespachar(sol: SolicitudDetail | null) {
 		return sol && (isAdmin || isAlmacenero) && sol.estado === 'aprobado';
 	}
 
 	function canEntregar(sol: SolicitudDetail | null) {
 		return sol && (isAdmin || isAlmacenero) && sol.estado === 'despachado';
-	}
-
-	function canCancelar(sol: SolicitudDetail | null) {
-		return sol && (isAdmin || (isSolicitante && isOwnSol(sol))) && sol.estado === 'enviado';
 	}
 
 	const isSavingCreate = createMut.isPending || updateSolMut.isPending;
@@ -876,34 +825,6 @@ export default function SolicitudesPage() {
 												spacing={1}
 												sx={{ flexShrink: 0, ml: 2 }}
 											>
-												{canAprobarRechazar(selectedSol) && (
-													<>
-														<Tooltip title="Aprobar">
-															<Button
-																variant="outlined"
-																color="success"
-																size="small"
-																startIcon={
-																	<FuseSvgIcon>lucide:circle-check</FuseSvgIcon>
-																}
-																onClick={() => setAprobarId(selectedSol.id)}
-															>
-																Aprobar
-															</Button>
-														</Tooltip>
-														<Tooltip title="Rechazar">
-															<Button
-																variant="outlined"
-																color="error"
-																size="small"
-																startIcon={<FuseSvgIcon>lucide:circle-x</FuseSvgIcon>}
-																onClick={() => setRechazarId(selectedSol.id)}
-															>
-																Rechazar
-															</Button>
-														</Tooltip>
-													</>
-												)}
 												{canDespachar(selectedSol) && (
 													<Tooltip title="Despachar">
 														<Button
@@ -927,19 +848,6 @@ export default function SolicitudesPage() {
 															onClick={() => setEntregaOpen(true)}
 														>
 															Entregar
-														</Button>
-													</Tooltip>
-												)}
-												{canCancelar(selectedSol) && (
-													<Tooltip title="Cancelar">
-														<Button
-															variant="outlined"
-															color="error"
-															size="small"
-															startIcon={<FuseSvgIcon>lucide:ban</FuseSvgIcon>}
-															onClick={() => setCancelarId(selectedSol.id)}
-														>
-															Cancelar
 														</Button>
 													</Tooltip>
 												)}
@@ -1247,22 +1155,6 @@ export default function SolicitudesPage() {
 				</DialogActions>
 			</Dialog>
 
-			<AprobarDialog
-				open={!!aprobarId}
-				onClose={() => setAprobarId(null)}
-				isPending={aprobarMut.isPending}
-				solicitudId={aprobarId}
-				onAprobar={(id) => aprobarMut.mutate(id)}
-			/>
-
-			<RechazarDialog
-				open={!!rechazarId}
-				onClose={() => setRechazarId(null)}
-				isPending={rechazarMut.isPending}
-				solicitudId={rechazarId}
-				onRechazar={(id, obs) => rechazarMut.mutate({ id, obs })}
-			/>
-
 			<DespacharDialog
 				open={despachoOpen}
 				onClose={() => setDespachoOpen(false)}
@@ -1277,14 +1169,6 @@ export default function SolicitudesPage() {
 				isPending={entregarMut.isPending}
 				items={solItems}
 				onSubmit={(fecha) => entregarMut.mutate({ id: selectedId!, fecha })}
-			/>
-
-			<CancelarDialog
-				open={!!cancelarId}
-				onClose={() => setCancelarId(null)}
-				isPending={cancelarMut.isPending}
-				solicitudId={cancelarId}
-				onCancelar={(id) => cancelarMut.mutate(id)}
 			/>
 		</>
 	);
