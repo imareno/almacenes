@@ -7,7 +7,7 @@ namespace Almacen.Controllers;
 
 [ApiController]
 [Route("api/compras")]
-[Authorize]
+[Authorize(Roles = "admin,almacenero")]
 public class CompraController : ControllerBase
 {
     private readonly Db _db;

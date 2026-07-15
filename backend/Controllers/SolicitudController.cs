@@ -556,38 +556,6 @@ public class SolicitudController : ControllerBase
                 if (itemReq.CantidadAprobada > solItem.CantidadSolicitada)
                     return BadRequest(new { error = $"No se puede despachar más de lo solicitado para el ítem {itemReq.SolicitudItemId}" });
 
-                // Consumir lotes PEPS y registrar salida
-                List<LoteConsumo> consumos;
-                try
-                {
-                    consumos = await PepsHelper.ConsumirLotesAsync(
-                        conn, tx, solItem.MaterialId, sol.AlmacenId, itemReq.CantidadAprobada);
-                }
-                catch (InvalidOperationException ex)
-                {
-                    tx.Rollback();
-                    return BadRequest(new { error = ex.Message });
-                }
-
-                var costo = PepsHelper.CostoPonderado(consumos);
-
-                await conn.ExecuteAsync(
-                    @"INSERT INTO movimientos
-                        (tipo, material_id, almacen_id, cantidad, costo_unitario, fecha, solicitud_id, user_id, observacion)
-                      VALUES
-                        ('salida', @materialId, @almacenId, @cantidad, @costo, @fecha, @solId, @userId, @obs)",
-                    new
-                    {
-                        materialId = solItem.MaterialId,
-                        almacenId  = sol.AlmacenId,
-                        cantidad   = itemReq.CantidadAprobada,
-                        costo,
-                        fecha      = req.Fecha,
-                        solId      = id,
-                        userId,
-                        obs        = $"Despacho solicitud {sol.Id}"
-                    }, tx);
-
                 await conn.ExecuteAsync(
                     "UPDATE solicitud_items SET cantidad_aprobada = @cantidad WHERE id = @id",
                     new { cantidad = itemReq.CantidadAprobada, id = solItem.Id }, tx);

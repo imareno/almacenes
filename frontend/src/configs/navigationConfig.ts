@@ -45,14 +45,8 @@ const navigationConfig: FuseNavItemType[] = [
 				title: 'Compras',
 				type: 'item',
 				icon: 'lucide:shopping-cart',
-				url: '/compras'
-			},
-			{
-				id: 'movimientos',
-				title: 'Movimientos',
-				type: 'item',
-				icon: 'lucide:arrow-left-right',
-				url: '/movimientos'
+				url: '/compras',
+				auth: ['admin', 'almacenero']
 			},
 			{
 				id: 'solicitudes',
@@ -104,13 +98,6 @@ const navigationConfig: FuseNavItemType[] = [
 				type: 'item',
 				icon: 'lucide:receipt',
 				url: '/reportes/compras'
-			},
-			{
-				id: 'reporte-movimientos',
-				title: 'Movimientos',
-				type: 'item',
-				icon: 'lucide:bar-chart-2',
-				url: '/reportes/movimientos'
 			}
 		]
 	}

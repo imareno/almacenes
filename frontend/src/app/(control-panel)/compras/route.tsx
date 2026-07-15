@@ -5,7 +5,8 @@ const ComprasPage = lazy(() => import('./ComprasPage'));
 
 const route: FuseRouteItemType = {
 	path: 'compras',
-	element: <ComprasPage />
+	element: <ComprasPage />,
+	auth: ['admin', 'almacenero']
 };
 
 export default route;
