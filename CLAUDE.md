@@ -33,9 +33,9 @@
     AlmacenController.cs
     MaterialController.cs
     CompraController.cs
-    MovimientoController.cs
     SolicitudController.cs
     ReporteController.cs
+    MovimientoController.cs    ❌ DEPRECADO — removido, no se usa por ahora
   Helpers/
     PepsHelper.cs            → lógica PEPS/FIFO con bloqueo FOR UPDATE
     JwtHelper.cs             → generación y validación JWT
@@ -57,6 +57,10 @@
      14_solicitudes_datos_usuario.sql → columnas nombre snapshot (solicitante/aprobador/almacenero_nombre)
      15_solicitudes_borrador.sql      → agrega estado 'borrador' al CHECK
      16_solicitudes_estados_flujo.sql → renombra estados + columna aprobador_ci
+     17_solicitud_items_unique.sql → UNIQUE constraint en solicitud_items (reemplazado por 18)
+     18_solicitud_items_fix.sql    → agrega cantidad_aprobada + UNIQUE constraint
+     09_materiales_almacen.sql     → agrega almacen_id a materiales
+     10_materiales_quitar_unidad.sql → quita config universal de materiales
 
 /frontend                    → Fuse React Template (TypeScript)
   vite.config.mts            → proxy /api → localhost:5252, port 3000
@@ -71,8 +75,8 @@
       almacenes.ts           → CRUD almacenes + sub-almacenes + asignados
       compras.ts             → CRUD compras + compra_items
       materiales.ts          → getMateriales (para selects)
-      solicitudes.ts         → ✅ CRUD solicitudes + acciones (aprobar, rechazar, despachar, entregar, cancelar)
-      perfil.ts              → 🟡 getMyPerfil, savePerfil, getSubAlmacenesPerfil, getUsuarios
+      solicitudes.ts         → ✅ CRUD solicitudes + acciones + mis-aprobaciones + mis-despachos
+      perfil.ts              → ✅ getMyPerfil, savePerfil, getSubAlmacenesPerfil, getUsuarios, getAprobadores
     app/
       (public)/(auth)/       → login, sign-up (disabled), sign-out
       (control-panel)/
@@ -153,7 +157,8 @@ solicitudes     → id, numero, solicitante_id, solicitante_nombre, sub_almacen_
 
 -- Detalle de solicitudes
 solicitud_items → id, solicitud_id, material_id, cantidad_solicitada,
-                   cantidad_despachada, cantidad_entregada, created_at
+                   cantidad_aprobada, cantidad_despachada, cantidad_entregada,
+                   UNIQUE(solicitud_id, material_id), created_at
 
 -- Lotes PEPS/FIFO
 lotes           → id, material_id, almacen_id, cantidad_inicial,
@@ -212,10 +217,10 @@ APROBADOR aprueba o rechaza
   → rechazado: estado "rechazado" | registra: aprobador_id, aprobador_nombre, fecha_aprobacion, observacion
 
 ALMACENERO despacha materiales
-  → estado: "despachado"
-  → registra: almacenero_id, almacenero_nombre, fecha_despacho, cantidad_despachada por item
-  → genera movimientos de salida aplicando lógica PEPS
-  → descuenta lotes correspondientes (fecha_ingreso ASC)
+   → estado: "despachado"
+   → registra: almacenero_id, almacenero_nombre, fecha_despacho, cantidad_aprobada por item
+   ⚠️ PENDIENTE: no genera movimientos de salida. La lógica de costeo será en tiempo real
+   (a definir más adelante). Por ahora solo actualiza cantidad_aprobada y cambia estado.
 
 ALMACENERO confirma entrega física
   → estado: "entregado"
@@ -311,10 +316,8 @@ GROUP BY material_id, almacen_id
 - PUT    /api/compras/{id}/items/{itemId}    → editar ítem (solo pendiente)
 - DELETE /api/compras/{id}/items/{itemId}    → eliminar ítem (solo pendiente)
 
-### Movimientos
-- GET    /api/movimientos                    → con filtros material/almacen/tipo/fechas
-- POST   /api/movimientos/ingreso            → ingreso manual + lote PEPS
-- POST   /api/movimientos/salida             → salida manual con PEPS
+### Movimientos ❌ DEPRECADO
+*Controlador removido. Los movimientos se gestionan indirectamente desde Compras (ingreso al concluir) y Solicitudes (salida al despachar, pendiente de implementar PEPS). El helper PepsHelper.cs se conserva para uso futuro.*
 
 ### Solicitudes
 - GET    /api/solicitudes                    → filtro por rol: solicitante→propias, aprobador→propias+asignadas, almacenero→propias+sub-almacenes, admin→todas
@@ -329,6 +332,10 @@ GROUP BY material_id, almacen_id
 - PUT    /api/solicitudes/{id}/entregar      → almacenero/admin
 - PUT    /api/solicitudes/{id}/cancelar      → solicitante dueño/admin (solo enviado)
 
+### Solicitudes (endpoints adicionales)
+- GET    /api/solicitudes/mis-aprobaciones   → solicitudes donde el usuario es aprobador asignado (por CI)
+- GET    /api/solicitudes/mis-despachos      → solicitudes en aprobado/despachado/entregado para almacenero
+
 ### Reportes
 - GET /api/reportes/existencias              → stock actual por material/almacén
 - GET /api/reportes/kardex/{materialId}      → historial con saldo acumulado (window function)
@@ -336,12 +343,12 @@ GROUP BY material_id, almacen_id
 - GET /api/reportes/compras                  → resumen por período
 - GET /api/reportes/movimientos              → entradas/salidas con resumen por tipo
 
-### Perfil 🟡
+### Perfil ✅
 - GET    /api/perfil                         → perfil actual del usuario (con nombres)
 - PUT    /api/perfil                         → reemplaza perfil (subAlmacenIds + aprobadorId)
 - GET    /api/perfil/sub-almacenes           → todos los sub-almacenes activos agrupados por almacén
 - GET    /api/perfil/usuarios                → lista de usuarios activos (para selectores)
-- GET    /api/perfil/aprobadores             → 🟡 obtiene aprobadores del servicio externo de contrataciones
+- GET    /api/perfil/aprobadores             → obtiene aprobadores del servicio externo de contrataciones
 
 ## Frontend — React + Fuse (MUI) — TypeScript
 
@@ -362,14 +369,15 @@ GROUP BY material_id, almacen_id
 
 ### Páginas construidas
 - /almacenes              → ✅ CRUD maestro-detalle split view 30/70 (almacenes + sub-almacenes)
-- /compras                → ✅ Split view 40/60, filtro sub-almacén agrupado, CRUD cabecera+items, número auto al concluir. Header con PageBreadcrumb + motion + contador (igual que Solicitudes). Iconos FuseSvgIcon lucide. Autocomplete materiales.
-- /solicitudes            → ✅ Split view 40/60: lista solicitudes + detalle items. Flujo completo: borrador→enviado→aprobado/rechazado→despachado→entregado. Editar/enviar/eliminar en lista borrador. 7+ acciones según rol+estado. Header con PageBreadcrumb + motion. Chips outlined sin icono (estilo Compras). Skeleton loaders. Diálogos extraídos en `dialogs/`. canCreate() solo valida perfil.
-- /perfil                 → 🟡 Formulario single-select sub-almacén (agrupado por almacén) + aprobador. PUT guarda todo. Pendiente: obtener aprobadores de servicio externo.
+- /compras                → ✅ Split view 40/60, filtro sub-almacén agrupado, CRUD cabecera+items, número auto al concluir. Header con PageBreadcrumb + motion + contador. Iconos FuseSvgIcon lucide. Autocomplete materiales.
+- /materiales             → ✅ CRUD con DataGrid, server pagination, filtro por almacén y categoría, diálogo crear/editar
+- /solicitudes            → ✅ Split view 40/60: lista solicitudes + detalle items. Flujo completo: borrador→enviado→aprobado/rechazado→despachado→entregado. Editar/enviar/eliminar en lista borrador. 7+ acciones según rol+estado. Header con PageBreadcrumb + motion. Chips outlined sin icono (estilo Compras). Skeleton loaders. 5 diálogos extraídos en `dialogs/`. canCreate() solo valida perfil.
+- /aprobaciones           → ✅ Split view: lista (pendientes/aprobadas/rechazadas/historico) + detalle. Usa endpoint mis-aprobaciones. Dialogs AprobarDialog y RechazarDialog compartidos con solicitudes/dialogs/.
+- /despachos              → ✅ Split view: lista (por despachar/por entregar/entregadas/todas) + detalle. Usa endpoint mis-despachos. Dialogs DespacharDialog y EntregarDialog compartidos. Role-gated: admin o almacenero.
+- /perfil                 → ✅ Formulario single-select sub-almacén (agrupado por almacén) + aprobador (desde servicio externo). PUT guarda todo.
 - /dashboard              → placeholder (solo título, sin KPIs)
 
 ### Páginas por construir
-- /materiales             → tabla + formulario ABM
-- /movimientos            → tabla con filtros avanzados
 - /reportes/existencias   → tabla con existencias por almacén
 - /reportes/kardex        → tabla historial movimientos por material
 - /reportes/valorizado    → tabla existencias valorizadas PEPS
@@ -382,12 +390,13 @@ GROUP BY material_id, almacen_id
 ```
 app/(control-panel)/
   almacenes/                  → ✅ route.tsx + AlmacenesPage.tsx (split view)
+  aprobaciones/               → ✅ route.tsx + AprobacionesPage.tsx (split view, endpoint mis-aprobaciones)
   compras/                    → ✅ route.tsx + ComprasPage.tsx
   dashboard/                  → route.tsx + DashboardPage.tsx (placeholder)
-  materiales/                 → POR CREAR
-  movimientos/                → POR CREAR
-   solicitudes/                → ✅ route.tsx + SolicitudesPage.tsx + dialogs/ (6 componentes)
-  perfil/                     → 🟡 route.tsx + PerfilPage.tsx (single-select form)
+  despachos/                  → ✅ route.tsx + DespachosPage.tsx (split view, endpoint mis-despachos)
+  materiales/                 → ✅ route.tsx + MaterialesPage.tsx (CRUD con DataGrid)
+   solicitudes/                → ✅ route.tsx + SolicitudesPage.tsx + dialogs/ (5 componentes)
+  perfil/                     → ✅ route.tsx + PerfilPage.tsx (single-select + aprobador externo)
   reportes/
     existencias/              → POR CREAR
     kardex/                   → POR CREAR
@@ -398,10 +407,9 @@ app/(control-panel)/
 api/                          → un archivo por módulo (TypeScript)
   almacenes.ts                → ✅ CRUD almacenes + sub-almacenes + asignados
   compras.ts                  → ✅ CRUD compras + compra_items
-  materiales.ts               → ✅ getMateriales (para selects en compra_items)
-  movimientos.ts              → POR CREAR
-  solicitudes.ts              → ✅ CRUD solicitudes + todas las acciones
-  perfil.ts                   → ✅ getMyPerfil, savePerfil, getSubAlmacenesPerfil, getUsuarios
+  materiales.ts               → ✅ getMateriales, createMaterial, updateMaterial
+  solicitudes.ts              → ✅ CRUD solicitudes + acciones + mis-aprobaciones + mis-despachos
+  perfil.ts                   → ✅ getMyPerfil, savePerfil, getSubAlmacenesPerfil, getUsuarios, getAprobadores
   reportes.ts                 → POR CREAR
 ```
 
@@ -468,7 +476,7 @@ api/                          → un archivo por módulo (TypeScript)
 - ✅ AlmacenController (CRUD almacenes + sub-almacenes con validaciones de eliminación)
 - ✅ MaterialController
 - ✅ CompraController (CRUD + flujo pendiente→concluido, depende de sub_almacen_id)
-- ✅ MovimientoController + PepsHelper
+- ✅ PepsHelper (conservado para PEPS futuro) | ❌ MovimientoController (deprecado, removido)
 - ✅ SolicitudController (flujo completo, POST permite cualquier rol con perfil, depende de sub_almacen_id)
 - ✅ ReporteController
 - ✅ PerfilController (GET perfil, PUT perfil, GET sub-almacenes, GET usuarios)
@@ -480,15 +488,25 @@ api/                          → un archivo por módulo (TypeScript)
 - ✅ Layout personalizado: fullwidth, footer off, sin configurator, Logo ALMACENES/MOPSV, tema legacy+dark
 - ✅ Almacenes — CRUD maestro-detalle split view 30/70 (almacenes + sub-almacenes con sigla)
 - ✅ Compras — Split view 40/60, filtro sub-almacén agrupado, CRUD cabecera+items, número auto al concluir
+- ✅ Materiales — CRUD con DataGrid, server pagination, filtro almacén/categoría
 - ✅ API almacenes.ts + compras.ts + materiales.ts
-- ✅ Solicitudes — Split view 40/60, filtro estado, flujo borrador→enviado→aprobado/rechazado→despachado→entregado. Editar/enviar/eliminar en lista borrador. Acciones por rol. Header con PageBreadcrumb + motion. Chips outlined sin icono (estilo Compras). Skeleton loaders. 6 diálogos extraídos en dialogs/. FuseSvgIcon lucide. canCreate solo valida perfil.
+- ✅ Solicitudes — Split view 40/60, filtro estado, flujo borrador→enviado→aprobado/rechazado→despachado→entregado. Editar/enviar/eliminar en lista borrador. Acciones por rol. Header con PageBreadcrumb + motion. Chips outlined sin icono. Skeleton loaders. 5 diálogos extraídos en dialogs/. FuseSvgIcon lucide. canCreate solo valida perfil.
+- ✅ Aprobaciones — Split view dedicada con endpoint mis-aprobaciones. Dialogs compartidos con solicitudes/dialogs/.
+- ✅ Despachos — Split view dedicada con endpoint mis-despachos. Role-gated admin/almacenero. Dialogs compartidos.
 - ✅ API solicitudes.ts + perfil.ts
-- 🟡 Perfil — formulario single-select sub-almacén + aprobador. Pendiente: aprobadores desde servicio externo
+- ✅ Perfil — formulario single-select sub-almacén + aprobador (desde servicio externo)
 - 🟡 Dashboard — placeholder (solo título, sin KPIs)
-- [ ] Materiales (página + API)
-- [ ] Movimientos (página + API)
 - [ ] Reportes (5 reportes + API)
 - [ ] Dashboard KPIs
+- [ ] Movimientos de salida al despachar (lógica a definir, costeo en tiempo real)
+- [ ] Restaurar MovimientoController cuando se necesiten ingresos/salidas manuales
+
+## Issues conocidos
+
+1. **ALTO** — `SolicitudController.Despachar()` no genera movimientos de salida. Solo actualiza `cantidad_aprobada` y cambia estado. La lógica de costeo y movimientos se definirá más adelante (enfoque: consultas en tiempo real, no PEPS).
+2. ~~**BAJO** — `Models.cs` desactualizado~~ ✅ RESUELTO — 7 POCOs sincronizados con schema actual.
+3. ~~**BAJO** — `PerfilController.GetAprobadores()` debug logs~~ ✅ RESUELTO — Console.WriteLine eliminados.
+4. ~~**BAJO** — `PerfilController.SaveMyPerfil()` duplicados~~ ✅ RESUELTO — reemplazado por DELETE + INSERT.
 
 ## Al iniciar cada sesión
 
@@ -516,3 +534,6 @@ api/                          → un archivo por módulo (TypeScript)
 22. Perfil: persona_id viene del JWT (sub claim), sub_almacen_id es single-select agrupado por almacén, aprobador_id es CI del servicio externo (VARCHAR)
 23. Solicitudes: secuencia_solicitudes también reinicia por año, igual que compras
 24. Solicitudes: el `enviar` registra aprobador_ci y aprobador_nombre desde el perfil del solicitante
+25. Solicitudes: existen endpoints adicionales GET /api/solicitudes/mis-aprobaciones (filtra por CI del aprobador) y GET /api/solicitudes/mis-despachos (filtra por sub-almacenes del almacenero)
+26. Aprobaciones y Despachos tienen páginas dedicadas con sus propios endpoints y dialogs compartidos con solicitudes/dialogs/
+27. MaterialController depende de la columna `almacen_id` en tabla `materiales` (agregada por migration 09_materiales_almacen.sql)

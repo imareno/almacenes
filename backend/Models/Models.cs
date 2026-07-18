@@ -27,6 +27,8 @@ public class SubAlmacen
     public string? Descripcion           { get; set; }
     public int     SecuenciaIngresos     { get; set; }
     public int     SecuenciaSolicitudes  { get; set; }
+    public int     AnioIngresos          { get; set; }
+    public int     AnioSolicitudes       { get; set; }
     public bool    Active                { get; set; }
 }
 
@@ -38,6 +40,7 @@ public class Material
     public string?  Descripcion   { get; set; }
     public string   UnidadMedida  { get; set; } = "";
     public string?  Categoria     { get; set; }
+    public int?     AlmacenId     { get; set; }
     public bool     Active        { get; set; }
     public DateTime CreatedAt     { get; set; }
 }
@@ -63,6 +66,7 @@ public class CompraItem
     public int     MaterialId     { get; set; }
     public decimal Cantidad       { get; set; }
     public decimal PrecioUnitario { get; set; }
+    public string? UnidadMedida   { get; set; }
     public DateTime CreatedAt     { get; set; }
 }
 
@@ -85,19 +89,24 @@ public class Movimiento
 
 public class Solicitud
 {
-    public int       Id              { get; set; }
-    public string    Numero          { get; set; } = "";
-    public int       SolicitanteId   { get; set; }
-    public int       AlmacenId       { get; set; }
-    public string    Estado          { get; set; } = "borrador";
-    public int?      AprobadorId     { get; set; }
-    public int?      AlmaceneroId    { get; set; }
-    public DateTime  FechaSolicitud  { get; set; }
-    public DateTime? FechaAprobacion { get; set; }
-    public DateTime? FechaDespacho   { get; set; }
-    public DateTime? FechaEntrega    { get; set; }
-    public string?   Observacion     { get; set; }
-    public DateTime  CreatedAt       { get; set; }
+    public int       Id                 { get; set; }
+    public string    Numero             { get; set; } = "";
+    public int       SolicitanteId      { get; set; }
+    public string?   SolicitanteNombre  { get; set; }
+    public int       SubAlmacenId       { get; set; }
+    public string    Estado             { get; set; } = "borrador";
+    public int?      AprobadorId        { get; set; }
+    public string?   AprobadorCi        { get; set; }
+    public string?   AprobadorNombre    { get; set; }
+    public int?      AlmaceneroId       { get; set; }
+    public string?   AlmaceneroNombre   { get; set; }
+    public DateTime  FechaSolicitud     { get; set; }
+    public DateTime? FechaAprobacion    { get; set; }
+    public DateTime? FechaDespacho      { get; set; }
+    public DateTime? FechaEntrega       { get; set; }
+    public string?   Observacion        { get; set; }
+    public bool      Active             { get; set; }
+    public DateTime  CreatedAt          { get; set; }
 }
 
 public class SolicitudItem
@@ -106,6 +115,7 @@ public class SolicitudItem
     public int     SolicitudId        { get; set; }
     public int     MaterialId         { get; set; }
     public decimal CantidadSolicitada { get; set; }
+    public decimal CantidadAprobada   { get; set; }
     public decimal CantidadDespachada { get; set; }
     public decimal CantidadEntregada  { get; set; }
     public DateTime CreatedAt         { get; set; }
@@ -128,6 +138,7 @@ public class AlmacenEncargado
 {
     public int      AlmacenId  { get; set; }
     public int      UserId     { get; set; }
+    public bool     Admin      { get; set; }
     public bool     Active     { get; set; }
     public DateTime CreatedAt  { get; set; }
 }
@@ -144,5 +155,6 @@ public class Sesion
     public DateTime? FechaExpiracion  { get; set; }
     public DateTime? FechaLogout      { get; set; }
     public string    Estado           { get; set; } = "activa";
+    public string?   DatosUsuario     { get; set; }
     public DateTime  CreatedAt        { get; set; }
 }

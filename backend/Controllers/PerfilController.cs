@@ -71,46 +71,24 @@ public class PerfilController : ControllerBase
 
         try
         {
-            var existe = await conn.ExecuteScalarAsync<int?>(
-                "SELECT 1 FROM perfil WHERE persona_id = @userId LIMIT 1",
+            await conn.ExecuteAsync(
+                "DELETE FROM perfil WHERE persona_id = @userId",
                 new { userId }, tx);
 
             foreach (var subId in req.SubAlmacenIds)
             {
-                if (existe.HasValue)
-                {
-                    await conn.ExecuteAsync(
-                        @"UPDATE perfil
-                          SET sub_almacen_id   = @subId,
-                              aprobador_id     = @aprobadorId,
-                              aprobador_nombre = @aprobadorNombre,
-                              aprobador_cargo  = @aprobadorCargo
-                          WHERE persona_id = @userId",
-                        new
-                        {
-                            userId,
-                            subId = subId,
-                            aprobadorId = req.AprobadorId,
-                            aprobadorNombre = req.AprobadorNombre?.Trim(),
-                            aprobadorCargo = req.AprobadorCargo?.Trim()
-                        },
-                        tx);
-                }
-                else
-                {
-                    await conn.ExecuteAsync(
-                        @"INSERT INTO perfil (persona_id, sub_almacen_id, aprobador_id, aprobador_nombre, aprobador_cargo)
-                          VALUES (@userId, @subId, @aprobadorId, @aprobadorNombre, @aprobadorCargo)",
-                        new
-                        {
-                            userId,
-                            subId = subId,
-                            aprobadorId = req.AprobadorId,
-                            aprobadorNombre = req.AprobadorNombre?.Trim(),
-                            aprobadorCargo = req.AprobadorCargo?.Trim()
-                        },
-                        tx);
-                }
+                await conn.ExecuteAsync(
+                    @"INSERT INTO perfil (persona_id, sub_almacen_id, aprobador_id, aprobador_nombre, aprobador_cargo)
+                      VALUES (@userId, @subId, @aprobadorId, @aprobadorNombre, @aprobadorCargo)",
+                    new
+                    {
+                        userId,
+                        subId = subId,
+                        aprobadorId = req.AprobadorId,
+                        aprobadorNombre = req.AprobadorNombre?.Trim(),
+                        aprobadorCargo = req.AprobadorCargo?.Trim()
+                    },
+                    tx);
             }
 
             tx.Commit();
@@ -167,8 +145,6 @@ public class PerfilController : ControllerBase
         if (string.IsNullOrWhiteSpace(ci))
             return BadRequest(new { error = "No se encontró el CI en el token" });
 
-        Console.WriteLine($"[Perfil] CI del token: {ci}");
-
         var client = _httpFactory.CreateClient();
 
         // 1. Obtener relación laboral activa
@@ -184,26 +160,17 @@ public class PerfilController : ControllerBase
         }
 
         if (!respRelacion.IsSuccessStatusCode)
-        {
-            Console.WriteLine($"[Perfil] relacion_laboral falló: {respRelacion.StatusCode}");
             return StatusCode(502, new { error = "No se pudo obtener la relación laboral" });
-        }
 
         var bodyRelacion = await respRelacion.Content.ReadAsStringAsync();
-        Console.WriteLine($"[Perfil] relacion_laboral response: {bodyRelacion[..Math.Min(bodyRelacion.Length, 500)]}");
-
         var relaciones = JsonSerializer.Deserialize<List<RelacionLaboralRow>>(bodyRelacion, JsonOpts);
-        Console.WriteLine($"[Perfil] relaciones count: {relaciones?.Count ?? 0}");
-
         var activa = relaciones?.FirstOrDefault(r => r.Activo);
-        Console.WriteLine($"[Perfil] activa: {(activa is null ? "null" : activa.Id.ToString())}");
 
         if (activa is null)
             return Ok(new { items = Array.Empty<AprobadorRow>() });
 
         // 2. Obtener aprobadores (inmediato superior)
         var url = $"https://hades.oopp.gob.bo/contrataciones/api/relacion_laboral/{ci}/{activa.Id}/inmediato_superior/";
-        Console.WriteLine($"[Perfil] llamando 2do servicio: {url}");
         HttpResponseMessage respAprobadores;
         try
         {
@@ -217,16 +184,10 @@ public class PerfilController : ControllerBase
         }
 
         if (!respAprobadores.IsSuccessStatusCode)
-        {
-            Console.WriteLine($"[Perfil] inmediato_superior falló: {respAprobadores.StatusCode}");
             return StatusCode(502, new { error = "No se pudieron obtener los aprobadores" });
-        }
 
         var bodyAprob = await respAprobadores.Content.ReadAsStringAsync();
-        Console.WriteLine($"[Perfil] inmediato_superior response: {bodyAprob[..Math.Min(bodyAprob.Length, 500)]}");
-
         var aprobadores = JsonSerializer.Deserialize<List<AprobadorRow>>(bodyAprob, JsonOpts);
-        Console.WriteLine($"[Perfil] aprobadores count: {aprobadores?.Count ?? 0}");
 
         return Ok(new { items = aprobadores ?? new List<AprobadorRow>() });
     }
