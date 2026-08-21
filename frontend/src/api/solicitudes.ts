@@ -155,3 +155,6 @@ export const entregarSolicitud = (id: number, fecha: string): Promise<void> =>
 
 export const cancelarSolicitud = (id: number): Promise<void> =>
 	api.put(`solicitudes/${id}/cancelar`).then(() => undefined);
+
+export const printSolicitud = (id: number): Promise<Blob> =>
+	api.get(`reportes/solicitudes/${id}/reporte`).blob();

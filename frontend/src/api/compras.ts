@@ -99,3 +99,6 @@ export const updateCompraItem = (compraId: number, id: number, data: CompraItemI
 
 export const deleteCompraItem = (compraId: number, id: number): Promise<void> =>
 	api.delete(`compras/${compraId}/items/${id}`).then(() => undefined);
+
+export const printCompra = (id: number): Promise<Blob> =>
+	api.get(`reportes/compras/${id}/reporte`).blob();

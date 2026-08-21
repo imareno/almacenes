@@ -1,8 +1,11 @@
 using Almacen.Helpers;
+using Almacen.Models;
 using Dapper;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Security.Claims;
+using System.Text;
+using System.Text.Json;
 
 namespace Almacen.Controllers;
 
@@ -11,9 +14,16 @@ namespace Almacen.Controllers;
 [Authorize]
 public class SolicitudController : ControllerBase
 {
-    private readonly Db _db;
+    private readonly Db                 _db;
+    private readonly IHttpClientFactory _httpFactory;
 
-    public SolicitudController(Db db) => _db = db;
+    private const string UrlGetUsuario = "https://hades.oopp.gob.bo/seguridad/api/get_usuario/";
+
+    public SolicitudController(Db db, IHttpClientFactory httpFactory)
+    {
+        _db          = db;
+        _httpFactory = httpFactory;
+    }
 
     // GET /api/solicitudes?estado=&solicitanteId=&page=1&pageSize=20
     [HttpGet]
@@ -272,7 +282,7 @@ public class SolicitudController : ControllerBase
 
     // POST /api/solicitudes
     [HttpPost]
-    [Authorize(Roles = "admin,solicitante")]
+    [Authorize(Roles = "admin,solicitante,almacenero")]
     public async Task<IActionResult> Create([FromBody] SolicitudCreateRequest req)
     {
         using var conn = _db.CreateConnection();
@@ -302,7 +312,33 @@ public class SolicitudController : ControllerBase
         }
 
         var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
-        var nombre = User.FindFirstValue("nombre") ?? User.Identity?.Name;
+
+        // Datos del funcionario desde el servicio externo (token tknrh del JWT)
+        var tknrh = User.FindFirstValue("tknrh");
+        string nombreCompleto = "", organigrama = "", cargo = "";
+
+        if (!string.IsNullOrWhiteSpace(tknrh))
+        {
+            try
+            {
+                var client = _httpFactory.CreateClient();
+                var reqUsuario = new HttpRequestMessage(HttpMethod.Get, UrlGetUsuario);
+                reqUsuario.Headers.Add("Authorization", $"Token {tknrh}");
+                var respUsuario = await client.SendAsync(reqUsuario);
+
+                if (respUsuario.IsSuccessStatusCode)
+                {
+                    var usuario = JsonSerializer.Deserialize<UsuarioExterno>(await respUsuario.Content.ReadAsStringAsync());
+                    nombreCompleto = usuario?.Persona?.NombreCompleto?.Trim() ?? "";
+                    organigrama    = usuario?.Persona?.Organigrama?.Trim() ?? "";
+                    cargo          = usuario?.Persona?.Cargo?.Trim() ?? "";
+                }
+            }
+            catch { /* servicio externo no disponible — validación abajo */ }
+        }
+
+        if (string.IsNullOrWhiteSpace(nombreCompleto) || string.IsNullOrWhiteSpace(organigrama) || string.IsNullOrWhiteSpace(cargo))
+            return BadRequest(new { error = "Los datos del funcionario no estan completos" });
 
         conn.Open();
         using var tx = conn.BeginTransaction();
@@ -323,10 +359,10 @@ public class SolicitudController : ControllerBase
             var numero  = $"SOL-{sigla}-{anio}-{secuencia:D6}";
 
             var solId = await conn.ExecuteScalarAsync<int>(
-                @"INSERT INTO solicitudes (numero, solicitante_id, solicitante_nombre, sub_almacen_id, estado, observacion)
-                  VALUES (@numero, @userId, @nombre, @subAlmacenId, 'borrador', @obs)
+                @"INSERT INTO solicitudes (numero, solicitante_id, solicitante_nombre, solicitante_organigrama, solicitante_cargo, sub_almacen_id, estado, observacion)
+                  VALUES (@numero, @userId, @nombreCompleto, @organigrama, @cargo, @subAlmacenId, 'borrador', @obs)
                   RETURNING id",
-                new { numero, userId, nombre, subAlmacenId = req.SubAlmacenId, obs = req.Observacion?.Trim() }, tx);
+                new { numero, userId, nombreCompleto, organigrama, cargo, subAlmacenId = req.SubAlmacenId, obs = req.Observacion?.Trim() }, tx);
 
             if (req.Items is not null && req.Items.Count > 0)
             {
@@ -353,7 +389,7 @@ public class SolicitudController : ControllerBase
 
     // PUT /api/solicitudes/{id}  (editar observacion, solo borrador)
     [HttpPut("{id:int}")]
-    [Authorize(Roles = "admin,solicitante")]
+    [Authorize(Roles = "admin,solicitante,almacenero")]
     public async Task<IActionResult> UpdateSolicitud(int id, [FromBody] SolicitudUpdateRequest req)
     {
         var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
@@ -379,7 +415,7 @@ public class SolicitudController : ControllerBase
 
     // DELETE /api/solicitudes/{id}  (baja lógica, solo borrador)
     [HttpDelete("{id:int}")]
-    [Authorize(Roles = "admin,solicitante")]
+    [Authorize(Roles = "admin,solicitante,almacenero")]
     public async Task<IActionResult> DeleteSolicitud(int id)
     {
         var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
@@ -404,7 +440,7 @@ public class SolicitudController : ControllerBase
 
     // PUT /api/solicitudes/{id}/enviar  (borrador → pendiente)
     [HttpPut("{id:int}/enviar")]
-    [Authorize(Roles = "admin,solicitante")]
+    [Authorize(Roles = "admin,solicitante,almacenero")]
     public async Task<IActionResult> EnviarSolicitud(int id)
     {
         var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
@@ -612,7 +648,7 @@ public class SolicitudController : ControllerBase
 
     // PUT /api/solicitudes/{id}/cancelar  (solo solicitante dueño o admin, si está pendiente)
     [HttpPut("{id:int}/cancelar")]
-    [Authorize(Roles = "admin,solicitante")]
+    [Authorize(Roles = "admin,solicitante,almacenero")]
     public async Task<IActionResult> Cancelar(int id)
     {
         var userId = int.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
@@ -641,7 +677,7 @@ public class SolicitudController : ControllerBase
 
     // POST /api/solicitudes/{id}/items
     [HttpPost("{id:int}/items")]
-    [Authorize(Roles = "admin,solicitante")]
+    [Authorize(Roles = "admin,solicitante,almacenero")]
     public async Task<IActionResult> AddItem(int id, [FromBody] SolicitudItemUpsertRequest req)
     {
         if (req.Cantidad <= 0)
@@ -676,7 +712,7 @@ public class SolicitudController : ControllerBase
 
     // PUT /api/solicitudes/{id}/items/{itemId}
     [HttpPut("{id:int}/items/{itemId:int}")]
-    [Authorize(Roles = "admin,solicitante")]
+    [Authorize(Roles = "admin,solicitante,almacenero")]
     public async Task<IActionResult> UpdateItem(int id, int itemId, [FromBody] SolicitudItemUpsertRequest req)
     {
         if (req.Cantidad <= 0)
@@ -708,7 +744,7 @@ public class SolicitudController : ControllerBase
 
     // DELETE /api/solicitudes/{id}/items/{itemId}
     [HttpDelete("{id:int}/items/{itemId:int}")]
-    [Authorize(Roles = "admin,solicitante")]
+    [Authorize(Roles = "admin,solicitante,almacenero")]
     public async Task<IActionResult> DeleteItem(int id, int itemId)
     {
         using var conn = _db.CreateConnection();

@@ -1,4 +1,5 @@
 using Almacen.Helpers;
+using Almacen.Models;
 using Dapper;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -99,14 +100,15 @@ public class AuthController : ControllerBase
         }
         catch { /* BD no disponible — rol por defecto "solicitante" */ }
 
-        // 4. Generar JWT con nombre, foto y ci en los claims
+        // 4. Generar JWT con nombre, foto, ci y el token del servicio externo en los claims
         var token = _jwt.GenerateToken(
             usuarioExt.Id,
             usuarioExt.Username,
             role,
             usuarioExt.Persona?.Nombres,
             usuarioExt.Persona?.Fotografia,
-            usuarioExt.Persona?.Ci);
+            usuarioExt.Persona?.Ci,
+            tokenData.Token);
 
         // 5. Registrar sesión (opcional)
         try
@@ -185,8 +187,9 @@ public class AuthController : ControllerBase
         var nombre = User.FindFirst("nombre")?.Value;
         var foto   = User.FindFirst("foto")?.Value;
         var ci     = User.FindFirst("ci")?.Value;
+        var tknrh  = User.FindFirst("tknrh")?.Value;
 
-        var token = _jwt.GenerateToken(userId, username, role, nombre, foto, ci);
+        var token = _jwt.GenerateToken(userId, username, role, nombre, foto, ci, tknrh);
 
         return Ok(new
         {
@@ -207,42 +210,6 @@ public class AuthController : ControllerBase
     {
         [JsonPropertyName("token")]
         public string? Token { get; set; }
-    }
-
-    private class UsuarioExterno
-    {
-        [JsonPropertyName("id")]
-        public int Id { get; set; }
-
-        [JsonPropertyName("username")]
-        public string Username { get; set; } = "";
-
-        [JsonPropertyName("email")]
-        public string Email { get; set; } = "";
-
-        [JsonPropertyName("persona")]
-        public PersonaExterna? Persona { get; set; }
-    }
-
-    private class PersonaExterna
-    {
-        [JsonPropertyName("nombre_completo")]
-        public string? NombreCompleto { get; set; }
-
-        [JsonPropertyName("nombres")]
-        public string? Nombres { get; set; }
-
-        [JsonPropertyName("apellido_paterno")]
-        public string? ApellidoPaterno { get; set; }
-
-        [JsonPropertyName("cargo")]
-        public string? Cargo { get; set; }
-
-        [JsonPropertyName("ci")]
-        public string? Ci { get; set; }
-
-        [JsonPropertyName("fotografia")]
-        public string? Fotografia { get; set; }
     }
 }
 

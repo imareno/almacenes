@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Almacen.Models;
 
 public class User
@@ -157,4 +159,43 @@ public class Sesion
     public string    Estado           { get; set; } = "activa";
     public string?   DatosUsuario     { get; set; }
     public DateTime  CreatedAt        { get; set; }
+}
+
+public class UsuarioExterno
+{
+    [JsonPropertyName("id")]
+    public int Id { get; set; }
+
+    [JsonPropertyName("username")]
+    public string Username { get; set; } = "";
+
+    [JsonPropertyName("email")]
+    public string Email { get; set; } = "";
+
+    [JsonPropertyName("persona")]
+    public PersonaExterna? Persona { get; set; }
+}
+
+public class PersonaExterna
+{
+    [JsonPropertyName("nombre_completo")]
+    public string? NombreCompleto { get; set; }
+
+    [JsonPropertyName("nombres")]
+    public string? Nombres { get; set; }
+
+    [JsonPropertyName("apellido_paterno")]
+    public string? ApellidoPaterno { get; set; }
+
+    [JsonPropertyName("cargo")]
+    public string? Cargo { get; set; }
+
+    [JsonPropertyName("ci")]
+    public string? Ci { get; set; }
+
+    [JsonPropertyName("fotografia")]
+    public string? Fotografia { get; set; }
+
+    [JsonPropertyName("organigrama")]
+    public string? Organigrama { get; set; }
 }

@@ -128,7 +128,7 @@ public class CompraController : ControllerBase
                 userId
             });
 
-        return CreatedAtAction(nameof(GetById), new { id = compraId }, new { id = compraId });
+        return Ok(new { id = compraId });
     }
 
     // PUT /api/compras/{id}
@@ -361,6 +361,8 @@ public class CompraController : ControllerBase
         public DateTime CreatedAt { get; set; }
     }
 
+    private record CompraConSubAlmacen(int Id, string Estado, int SubAlmacenId);
+
     private class CompraDetailRow
     {
         public int Id { get; set; }
@@ -379,7 +381,6 @@ public class CompraController : ControllerBase
     private record CompraItemRow(int Id, int MaterialId, string Codigo, string MaterialNombre,
                                  string UnidadMedida, decimal Cantidad, decimal PrecioUnitario, decimal Subtotal);
 
-    private record CompraConSubAlmacen(int Id, string Estado, int SubAlmacenId);
     private record EstadoRow(int Id, string Estado);
 }
 

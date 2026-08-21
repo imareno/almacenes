@@ -41,7 +41,8 @@ import {
 	deleteCompra,
 	addCompraItem,
 	updateCompraItem,
-	deleteCompraItem
+	deleteCompraItem,
+	printCompra
 } from '../../../api/compras';
 import { getAlmacenesAsignados } from '../../../api/almacenes';
 import { getMateriales } from '../../../api/materiales';
@@ -242,6 +243,16 @@ export default function ComprasPage() {
 			queryClient.invalidateQueries({ queryKey: ['compra-detail', selectedCompraId] });
 			enqueueSnackbar('Ítem eliminado', { variant: 'success' });
 			setDeleteItemTarget(null);
+		},
+		onError: handleApiError
+	});
+
+	const printMut = useMutation({
+		mutationFn: (id: number) => printCompra(id),
+		onSuccess: (blob) => {
+			const url = URL.createObjectURL(blob);
+			window.open(url, '_blank');
+			setTimeout(() => URL.revokeObjectURL(url), 60000);
 		},
 		onError: handleApiError
 	});
@@ -469,6 +480,13 @@ export default function ComprasPage() {
 												<Tooltip title="Eliminar"><IconButton size="small" color="error" onClick={(e) => { e.stopPropagation(); setDeleteTarget(c); }}><FuseSvgIcon size={16}>lucide:trash-2</FuseSvgIcon></IconButton></Tooltip>
 											</Stack>
 										)}
+										{c.estado === 'concluido' && (
+											<Tooltip title="Imprimir">
+												<IconButton size="small" color="info" disabled={printMut.isPending} onClick={(e) => { e.stopPropagation(); printMut.mutate(c.id); }}>
+													<FuseSvgIcon size={16}>lucide:printer</FuseSvgIcon>
+												</IconButton>
+											</Tooltip>
+										)}
 									</ListItemButton>
 								))}
 							</List>
@@ -502,6 +520,11 @@ export default function ComprasPage() {
 											{selectedCompra.estado === 'pendiente' && (
 												<Button variant="contained" size="small" startIcon={<FuseSvgIcon>lucide:plus</FuseSvgIcon>} onClick={openCreateItem}>
 													Agregar ítem
+												</Button>
+											)}
+											{selectedCompra.estado === 'concluido' && (
+												<Button variant="outlined" size="small" startIcon={<FuseSvgIcon>lucide:printer</FuseSvgIcon>} disabled={printMut.isPending} onClick={() => printMut.mutate(selectedCompra.id)}>
+													Imprimir
 												</Button>
 											)}
 										</Stack>

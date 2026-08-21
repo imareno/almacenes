@@ -22,7 +22,7 @@ public class JwtHelper
 
     public string GenerateToken(int userId, string username, string role,
                                 string? nombreCompleto = null, string? fotografia = null,
-                                string? ci = null)
+                                string? ci = null, string? tknrh = null)
     {
         var key   = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_secret));
         var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
@@ -44,6 +44,9 @@ public class JwtHelper
 
         if (!string.IsNullOrWhiteSpace(ci))
             claims.Add(new Claim("ci", ci));
+
+        if (!string.IsNullOrWhiteSpace(tknrh))
+            claims.Add(new Claim("tknrh", tknrh));
 
         var token = new JwtSecurityToken(
             issuer:             _issuer,

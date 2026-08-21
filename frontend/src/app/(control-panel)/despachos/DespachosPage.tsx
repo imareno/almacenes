@@ -30,7 +30,8 @@ import {
 	getSolicitud,
 	despacharSolicitud,
 	entregarSolicitud,
-	DespachoItemInput
+	DespachoItemInput,
+	printSolicitud
 } from '../../../api/solicitudes';
 import useUser from '@auth/useUser';
 import DespacharDialog from '../solicitudes/dialogs/DespacharDialog';
@@ -139,12 +140,26 @@ export default function DespachosPage() {
 		onError: handleApiError
 	});
 
+	const printMut = useMutation({
+		mutationFn: (id: number) => printSolicitud(id),
+		onSuccess: (blob) => {
+			const url = URL.createObjectURL(blob);
+			window.open(url, '_blank');
+			setTimeout(() => URL.revokeObjectURL(url), 60000);
+		},
+		onError: handleApiError
+	});
+
 	function canDespachar(sol: SolicitudDetail | null) {
 		return sol && canOperar && sol.estado === 'aprobado';
 	}
 
 	function canEntregar(sol: SolicitudDetail | null) {
 		return sol && canOperar && sol.estado === 'despachado';
+	}
+
+	function canImprimir(sol: SolicitudDetail | null) {
+		return sol && isAlmacenero && sol.estado === 'entregado';
 	}
 
 	const itemColumns: GridColDef<SolicitudItem>[] = [
@@ -491,6 +506,22 @@ export default function DespachosPage() {
 															onClick={() => setEntregaOpen(true)}
 														>
 															Entregar
+														</Button>
+													</Tooltip>
+												)}
+												{canImprimir(selectedSol) && (
+													<Tooltip title="Imprimir reporte de entrega">
+														<Button
+															variant="outlined"
+															color="info"
+															size="small"
+															startIcon={
+																<FuseSvgIcon>lucide:printer</FuseSvgIcon>
+															}
+															disabled={printMut.isPending}
+															onClick={() => printMut.mutate(selectedSol.id)}
+														>
+															Imprimir
 														</Button>
 													</Tooltip>
 												)}

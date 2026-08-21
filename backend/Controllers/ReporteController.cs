@@ -1,6 +1,9 @@
 using Dapper;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Almacen.Controllers;
 
@@ -10,267 +13,268 @@ namespace Almacen.Controllers;
 public class ReporteController : ControllerBase
 {
     private readonly Db _db;
+    private readonly IHttpClientFactory _httpFactory;
+    private readonly IConfiguration _config;
 
-    public ReporteController(Db db) => _db = db;
-
-    // GET /api/reportes/existencias?almacenId=&categoria=&soloConStock=true
-    [HttpGet("existencias")]
-    public async Task<IActionResult> Existencias(
-        [FromQuery] int?    almacenId    = null,
-        [FromQuery] string? categoria    = null,
-        [FromQuery] bool    soloConStock = true)
+    public ReporteController(Db db, IHttpClientFactory httpFactory, IConfiguration config)
     {
-        using var conn = _db.CreateConnection();
-
-        var where = new List<string> { "m.active = true" };
-        var p     = new DynamicParameters();
-
-        if (almacenId.HasValue) { where.Add("mv.almacen_id = @almacenId"); p.Add("almacenId", almacenId.Value); }
-        if (!string.IsNullOrWhiteSpace(categoria)) { where.Add("LOWER(m.categoria) = @cat"); p.Add("cat", categoria.ToLower().Trim()); }
-
-        var having = soloConStock ? "HAVING SUM(CASE WHEN mv.tipo = 'ingreso' THEN mv.cantidad ELSE -mv.cantidad END) > 0" : "";
-
-        var filas = await conn.QueryAsync<ExistenciaReporteRow>(
-            $@"SELECT
-                 mv.material_id,
-                 m.codigo,
-                 m.nombre        AS material_nombre,
-                 m.unidad_medida,
-                 m.categoria,
-                 mv.almacen_id,
-                 a.nombre        AS almacen_nombre,
-                 SUM(CASE WHEN mv.tipo = 'ingreso' THEN mv.cantidad ELSE -mv.cantidad END) AS existencia
-               FROM movimientos mv
-               JOIN materiales m ON m.id = mv.material_id
-               JOIN almacenes  a ON a.id = mv.almacen_id
-               WHERE {string.Join(" AND ", where)}
-               GROUP BY mv.material_id, m.codigo, m.nombre, m.unidad_medida, m.categoria,
-                        mv.almacen_id, a.nombre
-               {having}
-               ORDER BY m.nombre, a.nombre", p);
-
-        return Ok(filas);
+        _db = db;
+        _httpFactory = httpFactory;
+        _config = config;
     }
 
-    // GET /api/reportes/kardex/{materialId}?almacenId=&desde=&hasta=
-    [HttpGet("kardex/{materialId:int}")]
-    public async Task<IActionResult> Kardex(
-        int               materialId,
-        [FromQuery] int?      almacenId = null,
-        [FromQuery] DateOnly? desde     = null,
-        [FromQuery] DateOnly? hasta     = null)
+    // GET /api/reportes/compras/{id}/reporte
+    [HttpGet("compras/{id:int}/reporte")]
+    public async Task<IActionResult> GetCompraReporte(int id, CancellationToken ct)
     {
         using var conn = _db.CreateConnection();
 
-        var material = await conn.QuerySingleOrDefaultAsync<MaterialResumen>(
-            "SELECT id, codigo, nombre, unidad_medida FROM materiales WHERE id = @id",
-            new { id = materialId });
+        var compra = await conn.QuerySingleOrDefaultAsync<CompraDetalleRow>(
+            @"SELECT c.id, c.numero, c.proveedor, c.detalle, c.fecha, c.estado,
+                     c.sub_almacen_id, sa.nombre AS sub_almacen_nombre,
+                     a.id AS almacen_id, a.nombre AS almacen_nombre,
+                     c.created_at
+              FROM compras c
+              JOIN sub_almacenes sa ON sa.id = c.sub_almacen_id
+              JOIN almacenes a ON a.id = sa.almacen_id
+              WHERE c.id = @id AND c.active = true",
+            new { id });
 
-        if (material is null) return NotFound(new { error = "Material no encontrado" });
+        if (compra is null) return NotFound(new { error = "Compra no encontrada" });
 
-        var where = new List<string> { "mv.material_id = @materialId" };
-        var p     = new DynamicParameters();
-        p.Add("materialId", materialId);
+        var items = await conn.QueryAsync<CompraDetalleItemRow>(
+            @"SELECT ci.id, ci.material_id, m.codigo, m.nombre AS material_nombre,
+                     ci.unidad_medida, (ci.cantidad)::numeric(10,0) as cantidad, (ci.precio_unitario)::numeric(10,2) as precio_unitario,
+                     (ci.cantidad * ci.precio_unitario)::numeric(10,2) AS subtotal
+              FROM compra_items ci
+              JOIN materiales m ON m.id = ci.material_id
+              WHERE ci.compra_id = @id
+              ORDER BY ci.id",
+            new { id });
 
-        if (almacenId.HasValue) { where.Add("mv.almacen_id = @almacenId"); p.Add("almacenId", almacenId.Value); }
-        if (desde.HasValue) { where.Add("mv.fecha >= @desde"); p.Add("desde", desde.Value.ToDateTime(TimeOnly.MinValue)); }
-        if (hasta.HasValue) { where.Add("mv.fecha <= @hasta"); p.Add("hasta", hasta.Value.ToDateTime(TimeOnly.MaxValue)); }
+        var itemsList = items.Select((item, index) => new
+        {
+            nro = index + 1,
+            codigo = item.Codigo,
+            articulo = item.MaterialNombre,
+            unidad = item.UnidadMedida,
+            cantidad = item.Cantidad,
+            precioUnidad = item.PrecioUnitario,
+            precioTotal = item.Subtotal
+        }).ToList();
 
-        var clausula = "WHERE " + string.Join(" AND ", where);
-
-        // Saldo acumulado con window function OVER (PARTITION BY almacén ORDER BY fecha, id)
-        var movimientos = await conn.QueryAsync<KardexRow>(
-            $@"SELECT
-                 mv.id,
-                 mv.tipo,
-                 mv.almacen_id,
-                 a.nombre          AS almacen_nombre,
-                 mv.fecha,
-                 mv.cantidad,
-                 mv.costo_unitario,
-                 mv.cantidad * mv.costo_unitario                            AS total,
-                 mv.lote_ref,
-                 mv.solicitud_id,
-                 mv.compra_item_id,
-                 u.username         AS usuario,
-                 mv.observacion,
-                 SUM(CASE WHEN mv.tipo = 'ingreso' THEN mv.cantidad ELSE -mv.cantidad END)
-                   OVER (PARTITION BY mv.almacen_id ORDER BY mv.fecha, mv.id
-                         ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS saldo
-               FROM movimientos mv
-               JOIN almacenes a ON a.id = mv.almacen_id
-               JOIN users     u ON u.id = mv.user_id
-               {clausula}
-               ORDER BY mv.almacen_id, mv.fecha, mv.id", p);
-
-        return Ok(new { material, movimientos });
-    }
-
-    // GET /api/reportes/valorizado?almacenId=&categoria=
-    [HttpGet("valorizado")]
-    public async Task<IActionResult> Valorizado(
-        [FromQuery] int?    almacenId = null,
-        [FromQuery] string? categoria = null)
-    {
-        using var conn = _db.CreateConnection();
-
-        var where = new List<string> { "l.cantidad_disponible > 0", "m.active = true" };
-        var p     = new DynamicParameters();
-
-        if (almacenId.HasValue) { where.Add("l.almacen_id = @almacenId"); p.Add("almacenId", almacenId.Value); }
-        if (!string.IsNullOrWhiteSpace(categoria)) { where.Add("LOWER(m.categoria) = @cat"); p.Add("cat", categoria.ToLower().Trim()); }
-
-        var clausula = "WHERE " + string.Join(" AND ", where);
-
-        var filas = await conn.QueryAsync<ValorizadoRow>(
-            $@"SELECT
-                 l.material_id,
-                 m.codigo,
-                 m.nombre        AS material_nombre,
-                 m.unidad_medida,
-                 m.categoria,
-                 l.almacen_id,
-                 a.nombre        AS almacen_nombre,
-                 SUM(l.cantidad_disponible)                          AS cantidad,
-                 SUM(l.cantidad_disponible * l.costo_unitario)       AS valor_total,
-                 CASE WHEN SUM(l.cantidad_disponible) = 0 THEN 0
-                      ELSE SUM(l.cantidad_disponible * l.costo_unitario)
-                           / SUM(l.cantidad_disponible) END          AS costo_promedio
-               FROM lotes l
-               JOIN materiales m ON m.id = l.material_id
-               JOIN almacenes  a ON a.id = l.almacen_id
-               {clausula}
-               GROUP BY l.material_id, m.codigo, m.nombre, m.unidad_medida, m.categoria,
-                        l.almacen_id, a.nombre
-               ORDER BY m.nombre, a.nombre", p);
-
-        var total = filas.Sum(f => f.ValorTotal);
-        return Ok(new { total, items = filas });
-    }
-
-    // GET /api/reportes/compras?estado=&desde=&hasta=
-    [HttpGet("compras")]
-    public async Task<IActionResult> Compras(
-        [FromQuery] string?   estado = null,
-        [FromQuery] DateOnly? desde  = null,
-        [FromQuery] DateOnly? hasta  = null)
-    {
-        using var conn = _db.CreateConnection();
-
-        var where = new List<string>();
-        var p     = new DynamicParameters();
-
-        if (!string.IsNullOrWhiteSpace(estado)) { where.Add("c.estado = @estado"); p.Add("estado", estado.ToLower().Trim()); }
-        if (desde.HasValue) { where.Add("c.fecha >= @desde"); p.Add("desde", desde.Value.ToDateTime(TimeOnly.MinValue)); }
-        if (hasta.HasValue) { where.Add("c.fecha <= @hasta"); p.Add("hasta", hasta.Value.ToDateTime(TimeOnly.MaxValue)); }
-
-        var clausula = where.Count > 0 ? "WHERE " + string.Join(" AND ", where) : "";
-
-        var filas = await conn.QueryAsync<CompraReporteRow>(
-            $@"SELECT
-                 c.id,
-                 c.numero,
-                 c.proveedor,
-                 c.fecha,
-                 c.estado,
-                 u.username        AS usuario,
-                 COUNT(ci.id)      AS total_items,
-                 SUM(ci.cantidad * ci.precio_unitario) AS monto_total
-               FROM compras c
-               JOIN users       u  ON u.id  = c.user_id
-               LEFT JOIN compra_items ci ON ci.compra_id = c.id
-               {clausula}
-               GROUP BY c.id, c.numero, c.proveedor, c.fecha, c.estado, u.username
-               ORDER BY c.fecha DESC, c.id DESC", p);
-
-        var montoTotal = filas.Sum(f => f.MontoTotal ?? 0);
-        return Ok(new { montoTotal, items = filas });
-    }
-
-    // GET /api/reportes/movimientos?almacenId=&materialId=&tipo=&desde=&hasta=
-    [HttpGet("movimientos")]
-    public async Task<IActionResult> Movimientos(
-        [FromQuery] int?      almacenId  = null,
-        [FromQuery] int?      materialId = null,
-        [FromQuery] string?   tipo       = null,
-        [FromQuery] DateOnly? desde      = null,
-        [FromQuery] DateOnly? hasta      = null)
-    {
-        using var conn = _db.CreateConnection();
-
-        var where = new List<string>();
-        var p     = new DynamicParameters();
-
-        if (almacenId.HasValue)  { where.Add("mv.almacen_id  = @almacenId");  p.Add("almacenId",  almacenId.Value); }
-        if (materialId.HasValue) { where.Add("mv.material_id = @materialId"); p.Add("materialId", materialId.Value); }
-        if (!string.IsNullOrWhiteSpace(tipo)) { where.Add("mv.tipo = @tipo"); p.Add("tipo", tipo.ToLower().Trim()); }
-        if (desde.HasValue) { where.Add("mv.fecha >= @desde"); p.Add("desde", desde.Value.ToDateTime(TimeOnly.MinValue)); }
-        if (hasta.HasValue) { where.Add("mv.fecha <= @hasta"); p.Add("hasta", hasta.Value.ToDateTime(TimeOnly.MaxValue)); }
-
-        var clausula = where.Count > 0 ? "WHERE " + string.Join(" AND ", where) : "";
-
-        var filas = await conn.QueryAsync<MovimientoReporteRow>(
-            $@"SELECT
-                 mv.id,
-                 mv.tipo,
-                 mv.fecha,
-                 mv.material_id,
-                 m.codigo,
-                 m.nombre        AS material_nombre,
-                 m.unidad_medida,
-                 mv.almacen_id,
-                 a.nombre        AS almacen_nombre,
-                 mv.cantidad,
-                 mv.costo_unitario,
-                 mv.cantidad * mv.costo_unitario AS total,
-                 mv.observacion,
-                 u.username      AS usuario
-               FROM movimientos mv
-               JOIN materiales m ON m.id = mv.material_id
-               JOIN almacenes  a ON a.id = mv.almacen_id
-               JOIN users      u ON u.id = mv.user_id
-               {clausula}
-               ORDER BY mv.fecha DESC, mv.id DESC", p);
-
-        var resumen = filas
-            .GroupBy(f => f.Tipo)
-            .Select(g => new
+        var pAlmacenBody = new
+        {
+            cabecera = new
             {
-                tipo          = g.Key,
-                totalCantidad = g.Sum(x => x.Cantidad),
-                totalValor    = g.Sum(x => x.Total)
-            });
+                numero = compra.Numero ?? "",
+                fechaIngreso = compra.Fecha.ToString("yyyy-MM-dd"),
+                proveedor = compra.Proveedor,
+                almacen = compra.AlmacenNombre,
+                subAlmacen = compra.SubAlmacenNombre,
+                detalle = compra.Detalle
+            },
+            items = itemsList
+        };
 
-        return Ok(new { resumen, movimientos = filas });
+        var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+        var jsonBody = JsonSerializer.Serialize(pAlmacenBody, jsonOptions);
+
+        var reportPath = _config["Jasper:ReportPathIngresos"] ?? "/ingresos";
+        var titulo     = _config["Jasper:TituloIngreso"] ?? "NOTA DE INGRESO";
+
+        var (pdf, error) = await GenerarPdfJasperAsync(reportPath, titulo, jsonBody, ct);
+        if (pdf is null)
+            return StatusCode(502, new { error = "No se pudo generar el reporte en Jasper", detalle = error });
+
+        var nombreArchivo = string.IsNullOrWhiteSpace(compra.Numero) ? "Compra" : compra.Numero;
+        return File(pdf, "application/pdf", $"{nombreArchivo}.pdf");
+    }
+
+    // GET /api/reportes/solicitudes/{id}/reporte
+    [HttpGet("solicitudes/{id:int}/reporte")]
+    public async Task<IActionResult> GetSolicitudReporte(int id, CancellationToken ct)
+    {
+        using var conn = _db.CreateConnection();
+
+        var solicitud = await conn.QuerySingleOrDefaultAsync<SolicitudDetalleRow>(
+            @"SELECT s.id, s.numero, s.estado,
+                     s.solicitante_nombre AS solicitante,
+                     s.solicitante_cargo AS solicitante_cargo,
+                     s.solicitante_organigrama AS solicitante_organigrama,
+                     sa.nombre AS sub_almacen_nombre,
+                     a.nombre  AS almacen_nombre,
+                     s.fecha_solicitud
+              FROM solicitudes s
+              JOIN sub_almacenes sa ON sa.id = s.sub_almacen_id
+              JOIN almacenes     a  ON a.id  = sa.almacen_id
+              WHERE s.id = @id AND s.active = true",
+            new { id });
+
+        if (solicitud is null) return NotFound(new { error = "Solicitud no encontrada" });
+
+        // Cuerpo del reporte: costos PEPS (FIFO) por lote, calculados en tiempo real
+        var filas = await conn.QueryAsync<ReporteSolicitudRow>(
+            "SELECT * FROM fn_reporte_solicitud(@solicitudId)",
+            new { solicitudId = id });
+
+        var itemsList = filas.Select(f => new
+        {
+            nro = f.Nro,
+            codigo = f.Codigo,
+            articulo = f.Material,
+            unidad = f.Unidad ?? "",
+            fechaIngreso = f.FechaIngreso.ToString("yyyy-MM-dd"),
+            cantidad = f.Cantidad,
+            unitario = f.Unitario,
+            monto = f.Monto,
+            salidas = f.Salidas,
+            disponible = f.Disponible,
+            solicitado = f.Solicitado,
+            aprobado = f.Aprobado,
+            usado = f.Usado,
+            total = f.Total
+        }).ToList();
+
+        var pAlmacenBody = new
+        {
+            cabecera = new
+            {
+                numero = solicitud.Numero,
+                fechaSolicitud = solicitud.FechaSolicitud.ToString("yyyy-MM-dd"),
+                solicitante = solicitud.Solicitante ?? "",
+                solicitanteCargo = solicitud.SolicitanteCargo ?? "",
+                solicitanteOrganigrama = solicitud.SolicitanteOrganigrama ?? "",
+                almacen = solicitud.AlmacenNombre,
+                subAlmacen = solicitud.SubAlmacenNombre
+            },
+            items = itemsList
+        };
+
+        var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+        var jsonBody = JsonSerializer.Serialize(pAlmacenBody, jsonOptions);
+
+        var reportPath = _config["Jasper:ReportPathSolicitudes"] ?? "/solicitudes";
+        var titulo     = _config["Jasper:TituloSolicitud"] ?? "SOLICITUD DE MATERIALES";
+
+        var (pdf, error) = await GenerarPdfJasperAsync(reportPath, titulo, jsonBody, ct);
+        if (pdf is null)
+            return StatusCode(502, new { error = "No se pudo generar el reporte en Jasper", detalle = error });
+
+        var nombreArchivo = string.IsNullOrWhiteSpace(solicitud.Numero) ? "Solicitud" : solicitud.Numero;
+        return File(pdf, "application/pdf", $"{nombreArchivo}.pdf");
+    }
+
+    // ── Llamada a Jasper (Report Execution API: POST crea, GET descarga) ─────
+    private async Task<(byte[]? Pdf, string? Error)> GenerarPdfJasperAsync(
+        string reportPath, string titulo, string jsonBody, CancellationToken ct)
+    {
+        var http    = _httpFactory.CreateClient();
+        var server  = _config["Jasper:ServerUrl"] ?? "http://reportes.oopp.gob.bo";
+        var credentials = Convert.ToBase64String(
+            Encoding.ASCII.GetBytes($"{_config["Jasper:Username"]}:{_config["Jasper:Password"]}"));
+
+        // 1) POST — crear ejecución del reporte
+        var payload = new JsonObject
+        {
+            ["reportUnitUri"]     = reportPath,
+            ["outputFormat"]      = "pdf",
+            ["async"]             = false,
+            ["freshData"]         = true,
+            ["saveDataSnapshot"]  = false,
+            ["interactive"]       = false,
+            ["ignorePagination"]  = false,
+            ["parameters"] = new JsonObject
+            {
+                ["reportParameter"] = new JsonArray
+                {
+                    new JsonObject { ["name"] = "P_ALMACEN_TITULO", ["value"] = new JsonArray { titulo } },
+                    new JsonObject { ["name"] = "P_ALMACEN_BODY",   ["value"] = new JsonArray { jsonBody } }
+                }
+            }
+        };
+
+        var post = new HttpRequestMessage(HttpMethod.Post, $"{server}/rest_v2/reportExecutions")
+        {
+            Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json")
+        };
+        post.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", credentials);
+        post.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
+
+        var respPost = await http.SendAsync(post, ct);
+        if (!respPost.IsSuccessStatusCode)
+            return (null, await respPost.Content.ReadAsStringAsync(ct));
+
+        var ejecucion = JsonNode.Parse(await respPost.Content.ReadAsStringAsync(ct));
+        var requestId = ejecucion?["requestId"]?.GetValue<string>();
+        var exportId  = ejecucion?["exports"]?[0]?["id"]?.GetValue<string>();
+
+        if (string.IsNullOrWhiteSpace(requestId) || string.IsNullOrWhiteSpace(exportId))
+            return (null, "Respuesta de Jasper sin requestId/exports");
+
+        // 2) GET — descargar el PDF generado
+        var get = new HttpRequestMessage(HttpMethod.Get,
+            $"{server}/rest_v2/reportExecutions/{requestId}/exports/{exportId}/outputResource");
+        get.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", credentials);
+
+        var respGet = await http.SendAsync(get, ct);
+        if (!respGet.IsSuccessStatusCode)
+            return (null, await respGet.Content.ReadAsStringAsync(ct));
+
+        return (await respGet.Content.ReadAsByteArrayAsync(ct), null);
     }
 
     // ── Tipos internos ─────────────────────────────────────────
-    private record ExistenciaReporteRow(
-        int MaterialId, string Codigo, string MaterialNombre, string UnidadMedida, string? Categoria,
-        int AlmacenId, string AlmacenNombre, decimal Existencia);
+    private class CompraDetalleRow
+    {
+        public int Id { get; set; }
+        public string? Numero { get; set; }
+        public string Proveedor { get; set; } = "";
+        public string Detalle { get; set; } = "";
+        public DateOnly Fecha { get; set; }
+        public string Estado { get; set; } = "";
+        public int SubAlmacenId { get; set; }
+        public string SubAlmacenNombre { get; set; } = "";
+        public int AlmacenId { get; set; }
+        public string AlmacenNombre { get; set; } = "";
+        public DateTime CreatedAt { get; set; }
+    }
 
-    private record MaterialResumen(int Id, string Codigo, string Nombre, string UnidadMedida);
+    private record CompraDetalleItemRow(int Id, int MaterialId, string Codigo, string MaterialNombre,
+                                        string UnidadMedida, decimal Cantidad, decimal PrecioUnitario, decimal Subtotal);
 
-    private record KardexRow(
-        int Id, string Tipo,
-        int AlmacenId, string AlmacenNombre,
-        DateTime Fecha, decimal Cantidad, decimal CostoUnitario, decimal Total,
-        string? LoteRef, int? SolicitudId, int? CompraItemId,
-        string Usuario, string? Observacion, decimal Saldo);
+    private class SolicitudDetalleRow
+    {
+        public int Id { get; set; }
+        public string Numero { get; set; } = "";
+        public string Estado { get; set; } = "";
+        public string? Solicitante { get; set; }
+        public string? SolicitanteCargo { get; set; }
+        public string? SolicitanteOrganigrama { get; set; }
+        public string SubAlmacenNombre { get; set; } = "";
+        public string AlmacenNombre { get; set; } = "";
+        public string? Aprobador { get; set; }
+        public string? Almacenero { get; set; }
+        public DateOnly FechaSolicitud { get; set; }
+        public string? Observacion { get; set; }
+    }
 
-    private record ValorizadoRow(
-        int MaterialId, string Codigo, string MaterialNombre, string UnidadMedida, string? Categoria,
-        int AlmacenId, string AlmacenNombre,
-        decimal Cantidad, decimal ValorTotal, decimal CostoPromedio);
-
-    private record CompraReporteRow(
-        int Id, string Numero, string Proveedor, DateTime Fecha, string Estado,
-        string Usuario, int TotalItems, decimal? MontoTotal);
-
-    private record MovimientoReporteRow(
-        int Id, string Tipo, DateTime Fecha,
-        int MaterialId, string Codigo, string MaterialNombre, string UnidadMedida,
-        int AlmacenId, string AlmacenNombre,
-        decimal Cantidad, decimal CostoUnitario, decimal Total,
-        string? Observacion, string Usuario);
+    private class ReporteSolicitudRow
+    {
+        public long     Nro          { get; set; }
+        public int      MaterialId   { get; set; }
+        public string   Codigo       { get; set; } = "";
+        public string   Material     { get; set; } = "";
+        public string?  Unidad       { get; set; }
+        public DateOnly FechaIngreso { get; set; }
+        public decimal  Cantidad     { get; set; }
+        public decimal  Unitario     { get; set; }
+        public decimal  Monto        { get; set; }
+        public decimal  Salidas      { get; set; }
+        public decimal  Disponible   { get; set; }
+        public decimal  Solicitado   { get; set; }
+        public decimal  Aprobado     { get; set; }
+        public decimal  Usado        { get; set; }
+        public decimal  Total        { get; set; }
+    }
 }
