@@ -1,6 +1,7 @@
 using Dapper;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using System.Data;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -97,20 +98,7 @@ public class ReporteController : ControllerBase
     {
         using var conn = _db.CreateConnection();
 
-        var solicitud = await conn.QuerySingleOrDefaultAsync<SolicitudDetalleRow>(
-            @"SELECT s.id, s.numero, s.estado,
-                     s.solicitante_nombre AS solicitante,
-                     s.solicitante_cargo AS solicitante_cargo,
-                     s.solicitante_organigrama AS solicitante_organigrama,
-                     sa.nombre AS sub_almacen_nombre,
-                     a.nombre  AS almacen_nombre,
-                     s.fecha_solicitud
-              FROM solicitudes s
-              JOIN sub_almacenes sa ON sa.id = s.sub_almacen_id
-              JOIN almacenes     a  ON a.id  = sa.almacen_id
-              WHERE s.id = @id AND s.active = true",
-            new { id });
-
+        var solicitud = await ObtenerSolicitudDetalleAsync(conn, id);
         if (solicitud is null) return NotFound(new { error = "Solicitud no encontrada" });
 
         // Cuerpo del reporte: costos PEPS (FIFO) por lote, calculados en tiempo real
@@ -138,16 +126,7 @@ public class ReporteController : ControllerBase
 
         var pAlmacenBody = new
         {
-            cabecera = new
-            {
-                numero = solicitud.Numero,
-                fechaSolicitud = solicitud.FechaSolicitud.ToString("yyyy-MM-dd"),
-                solicitante = solicitud.Solicitante ?? "",
-                solicitanteCargo = solicitud.SolicitanteCargo ?? "",
-                solicitanteOrganigrama = solicitud.SolicitanteOrganigrama ?? "",
-                almacen = solicitud.AlmacenNombre,
-                subAlmacen = solicitud.SubAlmacenNombre
-            },
+            cabecera = ConstruirCabecera(solicitud),
             items = itemsList
         };
 
@@ -164,6 +143,80 @@ public class ReporteController : ControllerBase
         var nombreArchivo = string.IsNullOrWhiteSpace(solicitud.Numero) ? "Solicitud" : solicitud.Numero;
         return File(pdf, "application/pdf", $"{nombreArchivo}.pdf");
     }
+
+    // GET /api/reportes/solicitudes/{id}/reporte-simple  (sin FIFO ni costos: solo cantidades)
+    [HttpGet("solicitudes/{id:int}/reporte-simple")]
+    public async Task<IActionResult> GetSolicitudReporteSimple(int id, CancellationToken ct)
+    {
+        using var conn = _db.CreateConnection();
+
+        var solicitud = await ObtenerSolicitudDetalleAsync(conn, id);
+        if (solicitud is null) return NotFound(new { error = "Solicitud no encontrada" });
+
+        var filas = await conn.QueryAsync<ReporteSolicitudSimpleRow>(
+            "SELECT * FROM fn_reporte_solicitud_simple(@solicitudId)",
+            new { solicitudId = id });
+
+        var itemsList = filas.Select(f => new
+        {
+            nro = f.Nro,
+            codigo = f.Codigo,
+            articulo = f.Material,
+            unidad = f.Unidad ?? "",
+            fechaIngreso = f.FechaIngreso.ToString("yyyy-MM-dd"),
+            cantidad = f.Cantidad,
+            solicitado = f.Solicitado,
+            aprobado = f.Aprobado
+        }).ToList();
+
+        var pAlmacenBody = new
+        {
+            cabecera = ConstruirCabecera(solicitud),
+            items = itemsList
+        };
+
+        var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+        var jsonBody = JsonSerializer.Serialize(pAlmacenBody, jsonOptions);
+
+        var reportPath = _config["Jasper:ReportPathSolicitudesSimple"] ?? "/solicitudes";
+        var titulo     = _config["Jasper:TituloSolicitud"] ?? "SOLICITUD DE MATERIALES";
+
+        var (pdf, error) = await GenerarPdfJasperAsync(reportPath, titulo, jsonBody, ct);
+        if (pdf is null)
+            return StatusCode(502, new { error = "No se pudo generar el reporte en Jasper", detalle = error });
+
+        var nombreArchivo = string.IsNullOrWhiteSpace(solicitud.Numero) ? "Solicitud" : solicitud.Numero;
+        return File(pdf, "application/pdf", $"{nombreArchivo}-simple.pdf");
+    }
+
+    // ── Helpers de solicitudes ──────────────────────────────────
+    private static async Task<SolicitudDetalleRow?> ObtenerSolicitudDetalleAsync(IDbConnection conn, int id)
+    {
+        return await conn.QuerySingleOrDefaultAsync<SolicitudDetalleRow>(
+            @"SELECT s.id, s.numero, s.estado,
+                     s.solicitante_nombre AS solicitante,
+                     s.solicitante_cargo AS solicitante_cargo,
+                     s.solicitante_organigrama AS solicitante_organigrama,
+                     sa.nombre AS sub_almacen_nombre,
+                     a.nombre  AS almacen_nombre,
+                     s.fecha_solicitud
+              FROM solicitudes s
+              JOIN sub_almacenes sa ON sa.id = s.sub_almacen_id
+              JOIN almacenes     a  ON a.id  = sa.almacen_id
+              WHERE s.id = @id AND s.active = true",
+            new { id });
+    }
+
+    private static object ConstruirCabecera(SolicitudDetalleRow s) => new
+    {
+        numero = s.Numero,
+        fechaSolicitud = s.FechaSolicitud.ToString("yyyy-MM-dd"),
+        solicitante = s.Solicitante ?? "",
+        solicitanteCargo = s.SolicitanteCargo ?? "",
+        solicitanteOrganigrama = s.SolicitanteOrganigrama ?? "",
+        almacen = s.AlmacenNombre,
+        subAlmacen = s.SubAlmacenNombre
+    };
 
     // ── Llamada a Jasper (Report Execution API: POST crea, GET descarga) ─────
     private async Task<(byte[]? Pdf, string? Error)> GenerarPdfJasperAsync(
@@ -276,5 +329,18 @@ public class ReporteController : ControllerBase
         public decimal  Aprobado     { get; set; }
         public decimal  Usado        { get; set; }
         public decimal  Total        { get; set; }
+    }
+
+    private class ReporteSolicitudSimpleRow
+    {
+        public long     Nro          { get; set; }
+        public int      MaterialId   { get; set; }
+        public string   Codigo       { get; set; } = "";
+        public string   Material     { get; set; } = "";
+        public string?  Unidad       { get; set; }
+        public DateOnly FechaIngreso { get; set; }
+        public decimal  Cantidad     { get; set; }
+        public decimal  Solicitado   { get; set; }
+        public decimal  Aprobado     { get; set; }
     }
 }

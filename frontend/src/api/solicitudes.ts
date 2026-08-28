@@ -158,3 +158,6 @@ export const cancelarSolicitud = (id: number): Promise<void> =>
 
 export const printSolicitud = (id: number): Promise<Blob> =>
 	api.get(`reportes/solicitudes/${id}/reporte`).blob();
+
+export const printSolicitudSimple = (id: number): Promise<Blob> =>
+	api.get(`reportes/solicitudes/${id}/reporte-simple`).blob();

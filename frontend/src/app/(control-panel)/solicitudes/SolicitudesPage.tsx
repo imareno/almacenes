@@ -46,7 +46,8 @@ import {
 	deleteSolicitudItem,
 	SolicitudCreateInput,
 	SolicitudItemUpsertInput,
-	DespachoItemInput
+	DespachoItemInput,
+	printSolicitudSimple
 } from '../../../api/solicitudes';
 import { getAlmacenesAsignados } from '../../../api/almacenes';
 import { getMyPerfil } from '../../../api/perfil';
@@ -288,6 +289,16 @@ export default function SolicitudesPage() {
 			queryClient.invalidateQueries({ queryKey: ['solicitud-detail', selectedId] });
 			enqueueSnackbar('Ítem eliminado', { variant: 'success' });
 			setDeleteItemTarget(null);
+		},
+		onError: handleApiError
+	});
+
+	const printSimpleMut = useMutation({
+		mutationFn: (id: number) => printSolicitudSimple(id),
+		onSuccess: (blob) => {
+			const url = URL.createObjectURL(blob);
+			window.open(url, '_blank');
+			setTimeout(() => URL.revokeObjectURL(url), 60000);
 		},
 		onError: handleApiError
 	});
@@ -848,6 +859,20 @@ export default function SolicitudesPage() {
 															onClick={() => setEntregaOpen(true)}
 														>
 															Entregar
+														</Button>
+													</Tooltip>
+												)}
+												{selectedSol.estado === 'entregado' && (
+													<Tooltip title="Imprimir reporte">
+														<Button
+															variant="outlined"
+															color="info"
+															size="small"
+															startIcon={<FuseSvgIcon>lucide:printer</FuseSvgIcon>}
+															disabled={printSimpleMut.isPending}
+															onClick={() => printSimpleMut.mutate(selectedSol.id)}
+														>
+															Imprimir
 														</Button>
 													</Tooltip>
 												)}
